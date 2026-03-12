@@ -1,42 +1,53 @@
 name: "Domestic Direct"
-description: "包含了 Apple/Google 中国优化、网易云、以及常见的国内域名直连规则"
+description: "国内直连规则合集 (CN Direct)"
 rules:
-  # Apple 中国优化
-  - domain: { match: "safebrowsing.urlsec.qq.com", policy: "DIRECT" }
-  - domain: { match: "safebrowsing.googleapis.com", policy: "DIRECT" }
-  - domain_suffix: { match: "apple.com", policy: "DIRECT" }
-  - domain_suffix: { match: "icloud.com", policy: "DIRECT" }
-  - domain_suffix: { match: "itunes.apple.com", policy: "DIRECT" }
-  - domain_suffix: { match: "mzstatic.com", policy: "DIRECT" }
-  
-  # Google 中国服务
-  - domain_suffix: { match: "services.googleapis.cn", policy: "DIRECT" }
-  - domain_suffix: { match: "xn--ngstr-lra8j.com", policy: "DIRECT" }
-  - ip_cidr: { match: "203.208.39.0/24", policy: "DIRECT", no_resolve: true }
-  - ip_cidr: { match: "203.208.40.0/24", policy: "DIRECT", no_resolve: true }
-  
-  # 常用国内域名列表 (已去重合并)
-  - domain_suffix: { match: "baidu.com", policy: "DIRECT" }
-  - domain_suffix: { match: "qq.com", policy: "DIRECT" }
-  - domain_suffix: { match: "tencent.com", policy: "DIRECT" }
-  - domain_suffix: { match: "taobao.com", policy: "DIRECT" }
-  - domain_suffix: { match: "tmall.com", policy: "DIRECT" }
-  - domain_suffix: { match: "jd.com", policy: "DIRECT" }
-  - domain_suffix: { match: "163.com", policy: "DIRECT" }
-  - domain_suffix: { match: "126.net", policy: "DIRECT" }
-  - domain_suffix: { match: "amap.com", policy: "DIRECT" }
-  - domain_suffix: { match: "alipay.com", policy: "DIRECT" }
-  - domain_suffix: { match: "zhihu.com", policy: "DIRECT" }
-  - domain_suffix: { match: "meituan.com", policy: "DIRECT" }
-  - domain_suffix: { match: "weibo.com", policy: "DIRECT" }
-  - domain_suffix: { match: "iqiyi.com", policy: "DIRECT" }
-  - domain_suffix: { match: "youku.com", policy: "DIRECT" }
-  - domain_suffix: { match: "bilibili.com", policy: "DIRECT" }
-  - domain_suffix: { match: "xiaomi.com", policy: "DIRECT" }
-  - domain_suffix: { match: "microsoft.com", policy: "DIRECT" }
-  
-  # 远程集合调用 (对应你的 Surge Rule-Set)
-  - rule_set: { match: "https://ruleset.skk.moe/List/non_ip/apple_cn.conf", policy: "DIRECT" }
-  - rule_set: { match: "https://testingcf.jsdelivr.net/gh/dler-io/Rules@main/Surge/Surge%203/Provider/Domestic.list", policy: "DIRECT" }
-  - rule_set: { match: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/ChinaMax/ChinaMax.list", policy: "DIRECT" }
-  - rule_set: { match: "https://ruleset.skk.moe/List/non_ip/lan.conf", policy: "DIRECT" }
+
+# 微信
+- USER-AGENT,MicroMessenger Client*,DIRECT
+- USER-AGENT,WeChat*,DIRECT
+
+# 常见国内域名
+- DOMAIN-SUFFIX,126.com,DIRECT
+- DOMAIN-SUFFIX,126.net,DIRECT
+- DOMAIN-SUFFIX,163.com,DIRECT
+- DOMAIN-SUFFIX,baidu.com,DIRECT
+- DOMAIN-SUFFIX,qq.com,DIRECT
+- DOMAIN-SUFFIX,tencent.com,DIRECT
+- DOMAIN-SUFFIX,taobao.com,DIRECT
+- DOMAIN-SUFFIX,tmall.com,DIRECT
+- DOMAIN-SUFFIX,jd.com,DIRECT
+- DOMAIN-SUFFIX,zhihu.com,DIRECT
+- DOMAIN-SUFFIX,weibo.com,DIRECT
+- DOMAIN-SUFFIX,bilibili.com,DIRECT
+- DOMAIN-SUFFIX,iqiyi.com,DIRECT
+- DOMAIN-SUFFIX,youku.com,DIRECT
+- DOMAIN-SUFFIX,xiaomi.com,DIRECT
+- DOMAIN-SUFFIX,amap.com,DIRECT
+- DOMAIN-SUFFIX,meituan.com,DIRECT
+- DOMAIN-SUFFIX,alipay.com,DIRECT
+
+# Google 中国服务
+- DOMAIN-SUFFIX,services.googleapis.cn,DIRECT
+- DOMAIN-SUFFIX,xn--ngstr-lra8j.com,DIRECT
+
+# Google 中国 IP
+- IP-CIDR,203.208.39.0/24,DIRECT,no-resolve
+- IP-CIDR,203.208.40.0/24,DIRECT,no-resolve
+
+# 网易云音乐
+- RULE-SET,https://ruleset.skk.moe/List/non_ip/neteasemusic.conf,DIRECT
+- RULE-SET,https://ruleset.skk.moe/List/ip/neteasemusic.conf,DIRECT
+
+# Apple 中国
+- RULE-SET,https://ruleset.skk.moe/List/non_ip/apple_cn.conf,DIRECT
+
+# 国内规则合集
+- DOMAIN-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/ChinaMax/ChinaMax_Domain.list,DIRECT
+- RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/ChinaMax/ChinaMax_No_IPv6.list,DIRECT
+- RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/ChinaMax/ChinaMax.list,DIRECT
+
+# 内网
+- RULE-SET,https://ruleset.skk.moe/List/non_ip/lan.conf,DIRECT
+
+# CN IP
+- GEOIP,CN,DIRECT
