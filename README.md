@@ -1,0 +1,2 @@
+# baserules
+自用
