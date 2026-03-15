@@ -1,5 +1,5 @@
 name: "Adblock merge rules collection "
-description: "聚合拦截策略"
+description: "聚合拦截策略，引用了blackmatrix7，centralmatrx3，skk，dler等规则"
 rules:
   # === 关键字匹配拦截 ===
   - domain_keyword: { match: "admarvel", policy: "REJECT" }
@@ -32,7 +32,7 @@ rules:
   - domain_suffix: { match: "mmstat.com", policy: "REJECT" }
   - domain_suffix: { match: "vungle.com", policy: "REJECT" }
   
-# Anti-AD @dler
+# Anti-AD 
   - rule_set: { match: "https://testingcf.jsdelivr.net/gh/dler-io/Rules@main/Surge/Surge%203/Provider/AdBlock.list", policy: "REJECT" }
   - rule_set: { match: "https://testingcf.jsdelivr.net/gh/dler-io/Rules@main/Surge/Surge%203/Provider/HTTPDNS.list", policy: "REJECT" }
 # 基础12万拦截
