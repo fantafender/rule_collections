@@ -3,3 +3,10 @@ description: "聚合拦截策略"
 rules:
   - rule_set: { match: "https://testingcf.jsdelivr.net/gh/dler-io/Rules@main/Surge/Surge%203/Provider/AdBlock.list", policy: "REJECT" }
   - rule_set: { match: "https://testingcf.jsdelivr.net/gh/dler-io/Rules@main/Surge/Surge%203/Provider/HTTPDNS.list", policy: "REJECT" }
+
+  - rule_set: { match: "https://ruleset.skk.moe/List/non_ip/reject-drop.conf", policy: "REJECT-DROP" }
+  - rule_set: { match: "https://ruleset.skk.moe/List/ip/reject.conf", policy: "REJECT-DROP", no_resolve: true }
+  - rule_set: { match: "https://ruleset.skk.moe/List/non_ip/reject-no-drop.conf", policy: "REJECT-NO-DROP" }
+  - rule_set: { match: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Privacy/Privacy.list", policy: "REJECT" }
+  - rule_set: { match: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Hijacking/Hijacking.list", policy: "REJECT" }
+  - rule_set: { match: "https://raw.githubusercontent.com/Centralmatrix3/Matrix-io/master/Egern/Ruleset/Advertising.yaml", policy: "REJECT" }
