@@ -1,7 +1,37 @@
 name: "Adblock merge rules collection "
 description: "聚合拦截策略"
 rules:
+  # === 关键字匹配拦截 ===
+  - domain_keyword: { match: "admarvel", policy: "REJECT" }
+  - domain_keyword: { match: "admaster", policy: "REJECT" }
+  - domain_keyword: { match: "adsage", policy: "REJECT" }
+  - domain_keyword: { match: "adsmogo", policy: "REJECT" }
+  - domain_keyword: { match: "adsrvmedia", policy: "REJECT" }
+  - domain_keyword: { match: "adwords", policy: "REJECT" }
+  - domain_keyword: { match: "adservice", policy: "REJECT" }
+  - domain_keyword: { match: "domob", policy: "REJECT" }
+  - domain_keyword: { match: "duomeng", policy: "REJECT" }
+  - domain_keyword: { match: "dwtrack", policy: "REJECT" }
+  - domain_keyword: { match: "guanggao", policy: "REJECT" }
+  - domain_keyword: { match: "lianmeng", policy: "REJECT" }
+  - domain_keyword: { match: "mopub", policy: "REJECT" }
+  - domain_keyword: { match: "omgmta", policy: "REJECT" }
+  - domain_keyword: { match: "openx", policy: "REJECT" }
+  - domain_keyword: { match: "partnerad", policy: "REJECT" }
+  - domain_keyword: { match: "pingfore", policy: "REJECT" }
+  - domain_keyword: { match: "supersonicads", policy: "REJECT" }
+  - domain_keyword: { match: "uedas", policy: "REJECT" }
+  - domain_keyword: { match: "umeng", policy: "REJECT" }
+  - domain_keyword: { match: "usage", policy: "REJECT" }
+  - domain_keyword: { match: "wlmonitor", policy: "REJECT" }
+  - domain_keyword: { match: "zjtoolbar", policy: "REJECT" }
 
+  # === 后缀匹配拦截 ===
+  - domain_suffix: { match: "appsflyer.com", policy: "REJECT" }
+  - domain_suffix: { match: "doubleclick.net", policy: "REJECT" }
+  - domain_suffix: { match: "mmstat.com", policy: "REJECT" }
+  - domain_suffix: { match: "vungle.com", policy: "REJECT" }
+  
 # Anti-AD @dler
   - rule_set: { match: "https://testingcf.jsdelivr.net/gh/dler-io/Rules@main/Surge/Surge%203/Provider/AdBlock.list", policy: "REJECT" }
   - rule_set: { match: "https://testingcf.jsdelivr.net/gh/dler-io/Rules@main/Surge/Surge%203/Provider/HTTPDNS.list", policy: "REJECT" }
