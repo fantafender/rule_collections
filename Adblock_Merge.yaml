@@ -1,12 +1,25 @@
 name: "Adblock merge rules collection "
 description: "聚合拦截策略"
 rules:
+
+# Anti-AD @dler
   - rule_set: { match: "https://testingcf.jsdelivr.net/gh/dler-io/Rules@main/Surge/Surge%203/Provider/AdBlock.list", policy: "REJECT" }
   - rule_set: { match: "https://testingcf.jsdelivr.net/gh/dler-io/Rules@main/Surge/Surge%203/Provider/HTTPDNS.list", policy: "REJECT" }
-
-  - rule_set: { match: "https://ruleset.skk.moe/List/non_ip/reject-drop.conf", policy: "REJECT-DROP" }
-  - rule_set: { match: "https://ruleset.skk.moe/List/ip/reject.conf", policy: "REJECT-DROP", no_resolve: true }
+# 基础12万拦截
+  - rule_set: { match: "https://ruleset.skk.moe/List/domainset/reject.conf", policy: "REJECT" }
+# 额外20万
+  - rule_set: { match: "https://ruleset.skk.moe/List/domainset/reject_extra.conf", policy: "REJECT" }
+# non-ip
+  - rule_set: { match: https://ruleset.skk.moe/List/non_ip/reject.conf", policy: "REJECT" }
   - rule_set: { match: "https://ruleset.skk.moe/List/non_ip/reject-no-drop.conf", policy: "REJECT-NO-DROP" }
+  - rule_set: { match: "https://ruleset.skk.moe/List/non_ip/reject-drop.conf", policy: "REJECT-DROP" }
+# 搜狗输入法
+  - rule_set: { match: "https://ruleset.skk.moe/List/non_ip/sogouinput.conf", policy: "REJECT" }
+# ip
+  - rule_set: { match: "https://ruleset.skk.moe/List/ip/reject.conf", policy: "REJECT-DROP", no_resolve: true }
+# 反劫持
   - rule_set: { match: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Privacy/Privacy.list", policy: "REJECT" }
   - rule_set: { match: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Hijacking/Hijacking.list", policy: "REJECT" }
   - rule_set: { match: "https://raw.githubusercontent.com/Centralmatrix3/Matrix-io/master/Egern/Ruleset/Advertising.yaml", policy: "REJECT" }
+
+
