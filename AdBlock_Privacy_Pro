@@ -1,46 +1,114 @@
-#!name=AdBlock & Privacy Pro (GitHub Edition)
-#!desc=整合 SKK, BlackMatrix7 及自定义关键字拦截。支持 REJECT-TINYGIF。修正了字段名与格式以兼容 Egern。
+name: "AdBlock & Privacy Pro (Structured)"
+description: "整合 SKK, BlackMatrix7 及自定义关键字拦截。采用 Egern 标准结构化格式。"
 
-rule:
+rules:
   # === A. 自定义关键字拦截 (REJECT-TINYGIF) ===
-  - DOMAIN-KEYWORD,admarvel,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,admaster,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,adsage,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,adsmogo,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,adsrvmedia,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,adwords,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,adservice,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,domob,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,duomeng,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,dwtrack,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,guanggao,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,lianmeng,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,mopub,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,omgmta,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,openx,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,partnerad,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,pingfore,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,supersonicads,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,uedas,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,umeng,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,usage,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,wlmonitor,REJECT-TINYGIF
-  - DOMAIN-KEYWORD,zjtoolbar,REJECT-TINYGIF
-  - DOMAIN-SUFFIX,appsflyer.com,REJECT-TINYGIF
-  - DOMAIN-SUFFIX,doubleclick.net,REJECT-TINYGIF
-  - DOMAIN-SUFFIX,mmstat.com,REJECT-TINYGIF
-  - DOMAIN-SUFFIX,vungle.com,REJECT-TINYGIF
+  - domain_keyword:
+      match: admarvel
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: admaster
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: adsage
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: adsmogo
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: adsrvmedia
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: adwords
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: adservice
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: domob
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: duomeng
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: dwtrack
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: guanggao
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: lianmeng
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: mopub
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: omgmta
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: openx
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: partnerad
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: pingfore
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: supersonicads
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: uedas
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: umeng
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: usage
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: wlmonitor
+      policy: REJECT-TINYGIF
+  - domain_keyword:
+      match: zjtoolbar
+      policy: REJECT-TINYGIF
+  - domain_suffix:
+      match: appsflyer.com
+      policy: REJECT-TINYGIF
+  - domain_suffix:
+      match: doubleclick.net
+      policy: REJECT-TINYGIF
+  - domain_suffix:
+      match: mmstat.com
+      policy: REJECT-TINYGIF
+  - domain_suffix:
+      match: vungle.com
+      policy: REJECT-TINYGIF
 
-  # === B. 基础拦截 (RULE-SET) ===
-  - RULE-SET,https://ruleset.skk.moe/List/non_ip/reject-drop.conf,REJECT-DROP
-  - RULE-SET,https://ruleset.skk.moe/List/ip/reject.conf,REJECT-DROP
-  - RULE-SET,https://ruleset.skk.moe/List/non_ip/reject-no-drop.conf,REJECT-NO-DROP
-  - RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Privacy/Privacy.list,REJECT
-  - RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Hijacking/Hijacking.list,REJECT
+  # === B. 远程规则集拦截 (RULE-SET) ===
+  - rule_set:
+      match: https://ruleset.skk.moe/List/non_ip/reject-drop.conf
+      policy: REJECT-DROP
+  - rule_set:
+      match: https://ruleset.skk.moe/List/ip/reject.conf
+      policy: REJECT-DROP
+  - rule_set:
+      match: https://ruleset.skk.moe/List/non_ip/reject-no-drop.conf
+      policy: REJECT-NO-DROP
+  - rule_set:
+      match: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Privacy/Privacy.list
+      policy: REJECT
+  - rule_set:
+      match: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Hijacking/Hijacking.list
+      policy: REJECT
+  - rule_set:
+      match: https://raw.githubusercontent.com/Centralmatrix3/Matrix-io/master/Egern/Ruleset/Advertising.yaml
+      policy: REJECT
 
-  # === C. 大规模域名集 (DOMAIN-SET) ===
-  - DOMAIN-SET,https://ruleset.skk.moe/List/domainset/reject_extra.conf,REJECT
-  - DOMAIN-SET,https://ruleset.skk.moe/List/domainset/reject.conf,REJECT
-
-  # === D. 社区维护库 ===
-  - RULE-SET,https://raw.githubusercontent.com/Centralmatrix3/Matrix-io/master/Egern/Ruleset/Advertising.yaml,REJECT
+  # === C. 大规模域名集拦截 (DOMAIN-SET) ===
+  - domain_set:
+      match: https://ruleset.skk.moe/List/domainset/reject_extra.conf
+      policy: REJECT
+  - domain_set:
+      match: https://ruleset.skk.moe/List/domainset/reject.conf
+      policy: REJECT
