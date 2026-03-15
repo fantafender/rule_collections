@@ -1,0 +1,52 @@
+name: "AdBlock & Privacy Pro"
+description: "整合拦截规则。采用参考格式的流式 YAML 语法，支持 REJECT-TINYGIF。"
+
+rules:
+  # === A. 关键字拦截集合 (流式写法) ===
+  - domain_keyword:
+      match: 
+        - "admarvel"
+        - "admaster"
+        - "adsage"
+        - "adsmogo"
+        - "adsrvmedia"
+        - "adwords"
+        - "adservice"
+        - "domob"
+        - "duomeng"
+        - "dwtrack"
+        - "guanggao"
+        - "lianmeng"
+        - "mopub"
+        - "omgmta"
+        - "openx"
+        - "partnerad"
+        - "pingfore"
+        - "supersonicads"
+        - "uedas"
+        - "umeng"
+        - "usage"
+        - "wlmonitor"
+        - "zjtoolbar"
+      policy: "REJECT-TINYGIF"
+
+  # === B. 后缀拦截集合 ===
+  - domain_suffix:
+      match:
+        - "appsflyer.com"
+        - "doubleclick.net"
+        - "mmstat.com"
+        - "vungle.com"
+      policy: "REJECT-TINYGIF"
+
+  # === C. 远程规则集 (按照你的参考格式转换) ===
+  - rule_set: { match: "https://ruleset.skk.moe/List/non_ip/reject-drop.conf", policy: "REJECT-DROP" }
+  - rule_set: { match: "https://ruleset.skk.moe/List/ip/reject.conf", policy: "REJECT-DROP", no_resolve: true }
+  - rule_set: { match: "https://ruleset.skk.moe/List/non_ip/reject-no-drop.conf", policy: "REJECT-NO-DROP" }
+  - rule_set: { match: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Privacy/Privacy.list", policy: "REJECT" }
+  - rule_set: { match: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Hijacking/Hijacking.list", policy: "REJECT" }
+  - rule_set: { match: "https://raw.githubusercontent.com/Centralmatrix3/Matrix-io/master/Egern/Ruleset/Advertising.yaml", policy: "REJECT" }
+
+  # === D. 大规模域名集 ===
+  - domain_set: { match: "https://ruleset.skk.moe/List/domainset/reject_extra.conf", policy: "REJECT" }
+  - domain_set: { match: "https://ruleset.skk.moe/List/domainset/reject.conf", policy: "REJECT" }
