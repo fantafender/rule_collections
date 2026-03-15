@@ -1,8 +1,8 @@
-name: "AdBlock & Privacy Pro (GitHub Edition)"
-desc: "整合 SKK, BlackMatrix7 以及自定义关键字拦截。支持 REJECT-TINYGIF 优化展示。"
+#!name=AdBlock & Privacy Pro (GitHub Edition)
+#!desc=整合 SKK, BlackMatrix7 及自定义关键字拦截。支持 REJECT-TINYGIF。修正了字段名与格式以兼容 Egern。
 
 rule:
-  # === A. 自定义关键字拦截 (优先匹配，防止大白块) ===
+  # === A. 自定义关键字拦截 (REJECT-TINYGIF) ===
   - DOMAIN-KEYWORD,admarvel,REJECT-TINYGIF
   - DOMAIN-KEYWORD,admaster,REJECT-TINYGIF
   - DOMAIN-KEYWORD,adsage,REJECT-TINYGIF
@@ -31,18 +31,16 @@ rule:
   - DOMAIN-SUFFIX,mmstat.com,REJECT-TINYGIF
   - DOMAIN-SUFFIX,vungle.com,REJECT-TINYGIF
 
-  # === B. 基础拦截 (处理丢弃请求) ===
+  # === B. 基础拦截 (RULE-SET) ===
   - RULE-SET,https://ruleset.skk.moe/List/non_ip/reject-drop.conf,REJECT-DROP
   - RULE-SET,https://ruleset.skk.moe/List/ip/reject.conf,REJECT-DROP
-
-  # === C. 隐私与劫持拦截 ===
   - RULE-SET,https://ruleset.skk.moe/List/non_ip/reject-no-drop.conf,REJECT-NO-DROP
   - RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Privacy/Privacy.list,REJECT
   - RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Hijacking/Hijacking.list,REJECT
 
-  # === D. 大规模域名集 (针对 20万+ 规则的性能优化) ===
-  - DOMAIN-SET,https://ruleset.skk.moe/List/domainset/reject_extra.conf,REJECT,update_interval=86400
-  - DOMAIN-SET,https://ruleset.skk.moe/List/domainset/reject.conf,REJECT,update_interval=86400
+  # === C. 大规模域名集 (DOMAIN-SET) ===
+  - DOMAIN-SET,https://ruleset.skk.moe/List/domainset/reject_extra.conf,REJECT
+  - DOMAIN-SET,https://ruleset.skk.moe/List/domainset/reject.conf,REJECT
 
-  # === E. 社区维护库 ===
-  - RULE-SET,https://raw.githubusercontent.com/Centralmatrix3/Matrix-io/master/Egern/Ruleset/Advertising.yaml,REJECT,update_interval=86400
+  # === D. 社区维护库 ===
+  - RULE-SET,https://raw.githubusercontent.com/Centralmatrix3/Matrix-io/master/Egern/Ruleset/Advertising.yaml,REJECT
