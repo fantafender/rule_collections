@@ -1,16 +1,16 @@
 /**
  * ==========================================
- * 📌 代码名称: 🌐 全能网络管家 (Egern 终极版)
+ * 📌 代码名称: 🌐 全能网络管家 (视觉修正版)
  * ✨ 特色功能: 
- * 1. 代理穿透: 强行分离淘宝 (直连) 与 IPIP (节点) API，100% 准确识别代理状态。
- * 2. 增强容错: 即使网络挂掉，也确保组件不会空白，显示占位符。
- * 3. 视觉规范: 像素级适配 Egern DSL，页脚信息清晰。
+ * 1. 像素级对齐: 图标、文本与数值完美对齐。
+ * 2. 字体加粗: 将核心数值调整为 Bold Menlo 字体，提高可读性。
+ * 3. 增强页脚: 网关与运营商信息显示更准确且清晰。
  * ⏱️ 更新时间: 2026-03-16
  * ==========================================
  */
 
 export default async function(ctx) {
-  // --- 1. 颜色与样式配置 (严格适配深浅模式) ---
+  // --- 1. 颜色与样式配置 (适配深浅模式) ---
   const C_TITLE = { light: "#B8860B", dark: "#FFD700" }; 
   const C_SUB = { light: "#8E8E93", dark: "#A2A2B5" };
   const C_GREEN = { light: "#28CD41", dark: "#32D74B" };
@@ -18,34 +18,28 @@ export default async function(ctx) {
   const C_PURPLE = { light: "#AF52DE", dark: "#BF5AF2" };
   const C_MAIN = { light: "#1C1C1E", dark: "#FFFFFF" };
   const DIVIDER = { light: "rgba(0,0,0,0.08)", dark: "rgba(255,255,255,0.15)" };
+  const TAG_BG = { light: "#E5E5EA", dark: "#2C2C2E" }; // 标签背景色
 
   // --- 2. 异步数据获取工具 ---
   const fetchJson = async (url) => {
     try {
-      const resp = await ctx.http.get(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 4500 });
+      const resp = await ctx.http.get(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 4000 });
       return await resp.json();
     } catch (e) { return null; }
   };
 
-  // --- 3. 执行并行请求 (分离数据源确保检测准确) ---
-  const [localTaobao, nodeIPIP, pureInfo] = await Promise.all([
-    // 淘宝 API 默认走直连最快且准，获取本地 IP
-    fetchJson('https://www.taobao.com/help/getip.php'),
-    // IPIP.net 默认随代理走，获取落地 IP
+  // --- 3. 执行并行请求 ---
+  const [ipipRes, ipApi, pureInfo] = await Promise.all([
     fetchJson('https://myip.ipip.net/json'),
-    // IPPure 安全检测
+    fetchJson('http://ip-api.com/json/?lang=zh-CN'),
     fetchJson('https://my.ippure.com/v1/info')
   ]);
 
   // --- 4. 数据预处理与容错 ---
   const d = ctx.device || {};
-  // 提取本地 IP
-  const lIp = localTaobao?.ip || pureInfo?.ip || "获取中...";
-  // IPIP 的位置提取，防止 data 嵌套
-  const ipip = nodeIPIP?.data || nodeIPIP || {};
-  const nIp = ipip.ip || "获取中...";
-  
-  // 核心逻辑：强行对比淘宝 IP (直连) 与 IPIP (落地) IP
+  const lIp = ipipRes?.ip || "获取中...";
+  const ipip = ipipRes?.data || ipipRes || {}; // IPIP 嵌套判断
+  const nIp = ipApi?.query || pureInfo?.ip || "获取中...";
   const isProxy = lIp !== nIp && lIp !== "获取中...";
   
   // 风险评分处理
@@ -62,7 +56,7 @@ export default async function(ctx) {
     if (!isp) return "未知运营商";
     const s = String(isp).toLowerCase();
     if (/移动|cmcc/i.test(s)) return "中国移动";
-    if (/电信|telecom/i.test(s)) return "中国电信";
+    if (/电信|telecom|chinanet/i.test(s)) return "中国电信";
     if (/联通|unicom/i.test(s)) return "中国联通";
     return isp.split(' ')[0];
   };
@@ -78,9 +72,9 @@ export default async function(ctx) {
     type: 'stack', direction: 'row', alignItems: 'center', gap: 6,
     children: [
       { type: 'image', src: `sf-symbol:${ic}`, color: icCol, width: 12, height: 12 },
-      { type: 'text', text: label, font: { size: 11 }, textColor: C_SUB },
+      { type: 'text', text: label, font: { size: 11 }, textColor: C_SUB, width: 60, textAlign: 'left' }, // 固定宽度确保对齐
       { type: 'spacer' },
-      { type: 'text', text: String(val), font: { size: 11, weight: 'semibold', family: 'Menlo' }, textColor: valCol, maxLines: 1, minScale: 0.6 }
+      { type: 'text', text: String(val), font: { size: 11, weight: 'bold', family: 'Menlo' }, textColor: valCol, maxLines: 1, minScale: 0.6, textAlign: 'right' }
     ]
   });
 
@@ -90,7 +84,7 @@ export default async function(ctx) {
     padding: 14,
     backgroundGradient: {
       type: 'linear',
-      colors: [{ light: "#FFFFFF", dark: "#0D0D1A" }, { light: "#E5E5EA", dark: "#1C1C2E" }],
+      colors: [{ light: "#FFFFFF", dark: "#0D0D1A" }, { light: "#F2F2F7", dark: "#1C1C2E" }],
       startPoint: { x: 0, y: 0 }, endPoint: { x: 1, y: 1 }
     },
     children: [
@@ -101,11 +95,11 @@ export default async function(ctx) {
           { type: 'spacer' },
           { 
             type: 'stack', 
-            padding: [2, 6], 
-            backgroundColor: isProxy ? "rgba(175,82,222,0.15)" : "rgba(52,199,89,0.15)",
+            padding: [3, 8], 
+            backgroundColor: TAG_BG,
             borderRadius: 4,
             children: [
-              { type: 'text', text: isProxy ? 'PROXIED' : 'DIRECT', font: { size: 9, weight: 'black' }, textColor: isProxy ? C_PURPLE : C_GREEN }
+              { type: 'text', text: isProxy ? 'PROXIED' : 'DIRECT', font: { size: 9, weight: 'heavy' }, textColor: isProxy ? C_PURPLE : C_GREEN }
             ]
           }
       ]},
@@ -113,28 +107,28 @@ export default async function(ctx) {
 
       // 本地连接信息
       { type: 'stack', direction: 'column', gap: 5, children: [
-          Row("house.fill", C_BLUE, "内网 IP", d.ipv4?.address || "127.0.0.1", C_MAIN),
-          Row("location.fill", C_BLUE, "直连归属", pureInfo?.ip ? `${getFlag(pureInfo.countryCode)} 中国` : "位置未知", C_MAIN),
-          Row("wifi.router.fill", C_BLUE, "路由网关", d.ipv4?.gateway ||Gateway || "192.168.1.1", C_MAIN),
+          Row("house.fill", C_BLUE, "内网 IP", d.ipv4?.address ||Gateway || "127.0.0.1", C_MAIN),
+          Row("location.fill", C_BLUE, "直连位置", (ipip.location || []).slice(0, 3).join('') || "待获取", C_MAIN),
       ]},
 
       { type: 'spacer', length: 8 },
-      { type: 'divider', color: DIVIDER }, // 使用官方分割线
+      { type: 'stack', height: 0.5, backgroundColor: DIVIDER }, // 精细分割线
       { type: 'spacer', length: 8 },
 
       // 代理落地信息
       { type: 'stack', direction: 'column', gap: 5, children: [
           Row("network", C_PURPLE, "代理落地", nIp, C_GREEN),
-          Row("mappin.and.ellipse", C_PURPLE, "落地位置", (ipip.location || []).slice(0, 3).join('') || "位置未知", C_MAIN),
+          Row("mappin.and.ellipse", C_PURPLE, "落地位置", `${getFlag(ipApi?.countryCode)} ${ipApi?.country || ''} ${ipApi?.city || ''}`.trim() || "待获取", C_MAIN),
           Row(riskIc, riskCol, "风险评估", riskTxt, riskCol)
       ]},
 
       { type: 'spacer' },
 
       // 页脚
-      { type: 'stack', direction: 'row', children: [
+      { type: 'stack', direction: 'row', gap: 8, children: [
+          { type: 'text', text: `GW: ${d.ipv4?.gateway || Gateway || '192.168.1.1'}`, font: { size: 9 }, textColor: C_SUB },
           { type: 'spacer' },
-          { type: 'text', text: `ISP: ${fmtISP(ipip.location?.[4] || pureInfo?.asOrganization)}`, font: { size: 9 }, textColor: C_SUB }
+          { type: 'text', text: `ISP: ${fmtISP(ipApi?.isp || ipip.location?.[4])}`, font: { size: 9 }, textColor: C_SUB }
       ]}
     ]
   };
