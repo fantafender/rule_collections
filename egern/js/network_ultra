@@ -1,18 +1,55 @@
 export default async function(ctx) {
   const start = Date.now();
 
-  async function get(url) {
-    try {
-      const r = await ctx.http.get(url, { timeout: 3000 });
-      return await r.json();
-    } catch (e) {
-      return null;
+  // 备用公网IP查询API（提高成功率）
+  async function fetchPublicIP() {
+    const apis = [
+      'http://ip-api.com/json/?lang=zh-CN',
+      'https://myip.ipip.net/json',
+      'https://ipservice.ws.126.net/locate/api/getLocByIp'
+    ];
+    for (const url of apis) {
+      try {
+        const r = await ctx.http.get(url, { timeout: 3000 });
+        const data = await r.json();
+        if (url.includes('ip-api')) return data;
+        if (url.includes('ipip.net') && data.data) {
+          return {
+            query: data.data.ip,
+            country: data.data.location?.[0] || '',
+            city: data.data.location?.[2] || '',
+            countryCode: data.data.location?.[0] === '中国' ? 'CN' : '',
+            isp: data.data.location?.[4] || data.data.location?.[3] || '',
+            org: '',
+            as: ''
+          };
+        }
+        if (url.includes('126.net') && data.result) {
+          return {
+            query: data.result.ip,
+            country: '中国',
+            city: data.result.city || '',
+            countryCode: 'CN',
+            isp: data.result.operator || data.result.company || '',
+            org: '',
+            as: ''
+          };
+        }
+      } catch (e) {}
     }
+    return null;
   }
 
   const [ipapi, pure] = await Promise.all([
-    get("http://ip-api.com/json/?lang=zh-CN"),
-    get("https://my.ippure.com/v1/info")
+    fetchPublicIP(),
+    (async () => {
+      try {
+        const r = await ctx.http.get('https://my.ippure.com/v1/info', { timeout: 3000 });
+        return await r.json();
+      } catch {
+        return null;
+      }
+    })()
   ]);
 
   const delay = Date.now() - start;
@@ -30,16 +67,31 @@ export default async function(ctx) {
   const typeShort = pure?.isResidential ? "家宽" : "机房";
   const score = pure?.fraudScore ?? 0;
 
-  // --- 本地IP运营商信息（优先从蜂窝数据获取）---
+  // --- 运营商名称美化（可自定义映射）---
+  const fmtCarrier = (raw) => {
+    if (!raw) return "未知";
+    const map = {
+      'cmhk': 'CMHK', 'cmcc': '中国移动', 'china mobile': '中国移动',
+      'china unicom': '中国联通', 'unicom': '中国联通',
+      'china telecom': '中国电信', 'telecom': '中国电信'
+    };
+    const lower = raw.toLowerCase();
+    for (const [key, val] of Object.entries(map)) {
+      if (lower.includes(key)) return val;
+    }
+    return raw; // 保留原名（如 "CMHK"）
+  };
+
+  // --- 本地IP运营商信息（优先从蜂窝数据）---
   let carrier = d.cellular?.carrier || "";
   const simCountryCode = d.cellular?.isoCountryCode || "";
 
-  // 如果蜂窝信息缺失，尝试从IP-API的isp/org提取（作为后备）
+  // 如果蜂窝信息缺失，尝试从IP-API的isp/org提取第一个词
   if (!carrier) {
     if (isp) carrier = isp.split(' ')[0] || "";
     else if (org) carrier = org.split(' ')[0] || "";
-    else carrier = "未知";  // 确保不为空
   }
+  carrier = fmtCarrier(carrier) || "未知"; // 确保非空
 
   // 国家代码映射为中文
   const countryMap = {
@@ -49,10 +101,10 @@ export default async function(ctx) {
   };
   const simCountry = countryMap[simCountryCode] || simCountryCode;
 
-  // 本地IP后缀：优先显示SIM卡国家+运营商，否则只显示运营商（可能为“未知”）
+  // 本地IP后缀：优先显示SIM卡国家+运营商，否则只显示运营商（此时可能为“未知”）
   const localSuffix = simCountry ? `${simCountry} ${carrier}` : carrier;
 
-  // --- 代理判断（基于国家代码）---
+  // --- 代理判断（基于国家代码，更准确）---
   const isProxy = (simCountryCode && countryCode) 
     ? (simCountryCode !== countryCode) 
     : (publicIP !== localIP);
