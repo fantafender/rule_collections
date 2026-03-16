@@ -1,28 +1,26 @@
-const resp = await $http.get("https://api.ip.sb/ip")
-const ip = resp.body
+export default async function(ctx) {
 
-return {
-  type: "widget",
-  padding: 12,
-  children: [
+  const resp = await ctx.http.get("https://api.ip.sb/ip")
+  const ip = await resp.text()
 
-    {
-      type: "stack",
-      direction: "row",
-      children: [
-        {
-          type: "text",
-          text: "当前IP",
-          font: { size: 12 }
-        },
-        { type: "spacer" },
-        {
-          type: "text",
-          text: ip,
-          font: { size: 12 }
-        }
-      ]
-    }
+  return {
+    type: "widget",
+    padding: 12,
+    children: [
+      {
+        type: "text",
+        text: "Current IP",
+        font: { size: "body" },
+        textColor: "#ffffff"
+      },
+      {
+        type: "text",
+        text: ip,
+        font: { size: "headline", weight: "bold" },
+        textColor: "#ffffff"
+      }
+    ],
+    backgroundColor: "#1A1A2E"
+  }
 
-  ]
 }
