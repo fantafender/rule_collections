@@ -1,97 +1,146 @@
-/**
- * ==========================================
- * 📌 代码名称: 🌐 全能网络管家 (高级暗色版)
- * ✨ 修正重点: 
- * 1. 布局重构: 解决文字重叠、标题遮挡问题。
- * 2. 动态氛围: 采用更高级的深色调渐变。
- * 3. 信息完整: 补齐网络类型、线路、运营商信息。
- * ==========================================
- */
-
 export default async function(ctx) {
-  const startTime = Date.now();
-  const fetchJson = async (url) => {
+  const start = Date.now();
+
+  async function get(url) {
     try {
-      const resp = await ctx.http.get(url, { timeout: 3500 });
-      return await resp.json();
-    } catch (e) { return null; }
-  };
-
-  const [ipipRes, ipApi, pureInfo] = await Promise.all([
-    fetchJson('https://myip.ipip.net/json'),
-    fetchJson('http://ip-api.com/json/?lang=zh-CN'),
-    fetchJson('https://my.ippure.com/v1/info')
-  ]);
-  const delay = Date.now() - startTime;
-
-  // --- 氛围色彩逻辑 (修正为暗色调) ---
-  let bgColors = ["#0F0C29", "#302B63"]; // 默认：深邃星空蓝 (极速)
-  let statusCol = "#32D74B"; // 绿色状态
-  
-  if (delay > 500) {
-    bgColors = ["#200122", "#6f0000"]; // 暗红焦糖 (较差)
-    statusCol = "#FF453A";
-  } else if (delay > 250) {
-    bgColors = ["#141E30", "#243B55"]; // 灰蓝 (一般)
-    statusCol = "#FFD700";
+      const r = await ctx.http.get(url, { timeout: 3000 });
+      return await r.json();
+    } catch (e) {
+      return null;
+    }
   }
 
-  const d = ctx.device || {};
-  const ipip = ipipRes?.data || ipipRes || {};
-  const risk = pureInfo?.fraudScore || 0;
-  const isProxy = ipApi?.countryCode !== 'CN' || (ipip.ip && ipip.ip !== d.ipv4?.address);
+  const [ipapi, pure] = await Promise.all([
+    get("http://ip-api.com/json/?lang=zh-CN"),
+    get("https://my.ippure.com/v1/info")
+  ]);
 
-  // --- UI 构建函数 (使用 flex 解决溢出) ---
-  const Row = (ic, label, val, valCol = "#FFFFFF") => ({
-    type: 'stack', direction: 'row', alignItems: 'center',
-    children: [
-      { type: 'image', src: `sf-symbol:${ic}`, color: "#FFFFFF", opacity: 0.7, width: 13, height: 13 },
-      { type: 'spacer', length: 8 },
-      { type: 'text', text: label, font: { size: 12 }, textColor: "#FFFFFFB0" },
-      { type: 'spacer' }, // 自动推开
-      { type: 'text', text: String(val), font: { size: 12, weight: 'bold', family: 'Menlo' }, textColor: valCol, textAlign: 'right' }
-    ]
-  });
+  const delay = Date.now() - start;
+  const d = ctx.device || {};
+
+  // --- 核心数据 ---
+  const localIP = d.ipv4?.address || "N/A";
+  const publicIP = ipapi?.query || "N/A";
+  const country = ipapi?.country || "";
+  const city = ipapi?.city || "";
+  const countryCode = ipapi?.countryCode || "";
+  const isp = ipapi?.isp || "";
+  const org = ipapi?.org || "";
+  const asn = ipapi?.as ? ipapi.as.split(" ")[0] : "";
+  const typeShort = pure?.isResidential ? "家宽" : "机房";
+  const score = pure?.fraudScore ?? 0;
+
+  // --- 本地IP运营商信息（优先从蜂窝数据获取）---
+  let carrier = d.cellular?.carrier || "";
+  const simCountryCode = d.cellular?.isoCountryCode || "";
+
+  // 如果蜂窝信息缺失，尝试从IP-API的isp/org提取（作为后备）
+  if (!carrier) {
+    if (isp) carrier = isp.split(' ')[0] || "";
+    else if (org) carrier = org.split(' ')[0] || "";
+    else carrier = "未知";  // 确保不为空
+  }
+
+  // 国家代码映射为中文
+  const countryMap = {
+    "HK": "中国香港", "CN": "中国", "MO": "中国澳门", "TW": "中国台湾",
+    "JP": "日本", "KR": "韩国", "US": "美国", "SG": "新加坡",
+    "GB": "英国", "DE": "德国", "FR": "法国", "CA": "加拿大", "AU": "澳大利亚"
+  };
+  const simCountry = countryMap[simCountryCode] || simCountryCode;
+
+  // 本地IP后缀：优先显示SIM卡国家+运营商，否则只显示运营商（可能为“未知”）
+  const localSuffix = simCountry ? `${simCountry} ${carrier}` : carrier;
+
+  // --- 代理判断（基于国家代码）---
+  const isProxy = (simCountryCode && countryCode) 
+    ? (simCountryCode !== countryCode) 
+    : (publicIP !== localIP);
+
+  // --- 信号文本 ---
+  const radio = (d.cellular?.radio || "LTE").toUpperCase();
+  let signal = radio;
+  if (radio === "NR") {
+    signal = d.cellular?.generation === "NSA" ? "5G NSA" : "5G SA";
+  }
+  const signalText = `Cellular ${signal}`;
+
+  // --- 统一的文本行组件（灰阶色调，防溢出）---
+  function Row(label, value, valueColor = "#E0E0E0") {
+    return {
+      type: "stack",
+      direction: "row",
+      alignItems: "center",
+      gap: 6,
+      children: [
+        {
+          type: "text",
+          text: label,
+          font: { size: 15, weight: "bold" },
+          textColor: "#AAAAAA",
+          maxLines: 1,
+          minScale: 0.5
+        },
+        {
+          type: "text",
+          text: value,
+          font: { size: 15, weight: "bold", family: "Menlo" },
+          textColor: valueColor,
+          maxLines: 1,
+          minScale: 0.5,
+          flex: 1
+        }
+      ]
+    };
+  }
 
   return {
-    type: 'widget',
-    padding: 15,
-    backgroundGradient: {
-      type: 'linear', colors: bgColors, startPoint: { x: 0, y: 0 }, endPoint: { x: 1, y: 1 }
-    },
+    type: "widget",
+    padding: [14, 16, 14, 16],
+    backgroundColor: "#0B0B0B",
+    gap: 6,
     children: [
-      // 头部：紧凑布局
-      { type: 'stack', direction: 'row', alignItems: 'center', children: [
-          { type: 'image', src: 'sf-symbol:wifi', color: "#FFFFFF", width: 16, height: 16 },
-          { type: 'spacer', length: 6 },
-          { type: 'text', text: d.wifi?.ssid || d.cellular?.radio || "NETWORK", font: { size: 16, weight: 'heavy' }, textColor: "#FFFFFF" },
-          { type: 'spacer' },
-          { 
-            type: 'stack', padding: [2, 6], backgroundColor: "rgba(255,255,255,0.15)", borderRadius: 4,
-            children: [{ type: 'text', text: isProxy ? "PROXIED" : "DIRECT", font: { size: 9, weight: 'black' }, textColor: isProxy ? "#BF5AF2" : "#32D74B" }]
+      {
+        type: "text",
+        text: signalText,
+        font: { size: 15, weight: "bold" },
+        textColor: "#FFFFFF",
+        maxLines: 1,
+        minScale: 0.5
+      },
+      Row("本地IP：", `${localIP} ${localSuffix}`),
+      Row(
+        "公网IP：",
+        `${publicIP}  ${country} ${city}${isProxy ? " 代理" : ""}`,
+        isProxy ? "#CCCCCC" : "#E0E0E0"
+      ),
+      Row("网络类型：", `${typeShort}  ${asn}  ${isp || org}`),
+      {
+        type: "stack",
+        direction: "row",
+        alignItems: "center",
+        gap: 20,
+        children: [
+          {
+            type: "text",
+            text: `Risk Score ${score}`,
+            font: { size: 15, weight: "bold", family: "Menlo" },
+            textColor: "#CCCCCC",
+            maxLines: 1,
+            minScale: 0.5
+          },
+          {
+            type: "text",
+            text: `延迟 ${delay}ms`,
+            font: { size: 15, weight: "bold", family: "Menlo" },
+            textColor: delay > 400 ? "#AAAAAA" : "#E0E0E0",
+            maxLines: 1,
+            minScale: 0.5,
+            flex: 1,
+            textAlign: "right"
           }
-      ]},
-
-      { type: 'spacer', length: 12 },
-
-      // 信息区 (补齐你之前要求的信息)
-      { type: 'stack', direction: 'column', gap: 6, children: [
-          Row("house.fill", "内网 IPv4", d.ipv4?.address || "127.0.0.1"),
-          Row("globe", "公网出口", ipApi?.query || ipip.ip || "获取中...", statusCol),
-          Row("location.fill", "归属位置", `${ipApi?.country || ''} ${ipApi?.city || ''}`.trim() || "未知"),
-          Row("server.rack.fill", "线路类型", pureInfo?.isResidential ? "原生住宅" : "机房/数据中心"),
-          Row("shield.fill", "风险评估", `Score: ${risk}`, risk > 40 ? "#FFD700" : "#32D74B"),
-          Row("timer", "实时延迟", `${delay} ms`, statusCol)
-      ]},
-
-      { type: 'spacer' },
-
-      // 页脚：运营商
-      { type: 'stack', direction: 'row', opacity: 0.6, children: [
-          { type: 'text', text: `GW: ${d.ipv4?.gateway || "192.168.1.1"}`, font: { size: 10 }, textColor: "#FFFFFF" },
-          { type: 'spacer' },
-          { type: 'text', text: `ISP: ${ipApi?.isp || "Unknown"}`, font: { size: 10 }, textColor: "#FFFFFF" }
-      ]}
+        ]
+      }
     ]
   };
 }
