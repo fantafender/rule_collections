@@ -1,137 +1,201 @@
 /**
- * ==========================================
- * 📌 代码名称: 🌐 全能网络管家 (Egern 合规版)
- * ✨ 特色功能: 
- * 1. 链路检测: SSID/蜂窝、内网IP、网关。
- * 2. 代理穿透: 自动对比 Local/Node IP 识别代理状态。
- * 3. 风险预警: 集成 IPPure 欺诈评分检测。
- * 4. DSL 规范: 100% 适配 Egern 渲染引擎。
- * ⏱️ 更新时间: 2026-03-16
- * ==========================================
+ * 🌐 全能网络管家 (Egern 稳定版)
+ * 兼容 Egern Widget Runtime
  */
 
 export default async function(ctx) {
-  // --- 1. 颜色与样式定义 (严格遵循 Color 类型定义) ---
-  const C_TITLE = { light: "#B8860B", dark: "#FFD700" }; 
-  const C_SUB = { light: "#666666", dark: "#A2A2B5" };
-  const C_GREEN = { light: "#28CD41", dark: "#32D74B" };
-  const C_BLUE = { light: "#007AFF", dark: "#0A84FF" };
-  const C_PURPLE = { light: "#AF52DE", dark: "#BF5AF2" };
-  const C_MAIN = { light: "#1C1C1E", dark: "#FFFFFF" };
-  const DIVIDER = { light: "rgba(0,0,0,0.08)", dark: "rgba(255,255,255,0.1)" };
 
-  // --- 2. 异步数据获取工具 ---
+  const BG = [{ light:'#0D0D1A', dark:'#0D0D1A'}, { light:'#1C1C2E', dark:'#1C1C2E'}];
+
+  const C_TITLE = { light:'#FFD700', dark:'#FFD700'};
+  const C_SUB = { light:'#A2A2B5', dark:'#A2A2B5'};
+  const C_MAIN = { light:'#FFFFFF', dark:'#FFFFFF'};
+  const C_GREEN = { light:'#32D74B', dark:'#32D74B'};
+  const C_BLUE = { light:'#00AAE4', dark:'#00AAE4'};
+  const C_PURPLE = { light:'#AF52DE', dark:'#BF5AF2'};
+
   const fetchJson = async (url) => {
     try {
-      const resp = await ctx.http.get(url, { 
-        headers: { "User-Agent": "Mozilla/5.0" }, 
-        timeout: 4000 
+      const res = await ctx.fetch(url,{
+        headers:{'User-Agent':'Mozilla/5.0'},
+        timeout:5000
       });
-      // 官方文档推荐直接使用 resp.json()
-      return await resp.json();
-    } catch (e) { return null; }
+      return await res.json();
+    } catch(e){
+      return {};
+    }
   };
 
-  // --- 3. 执行并行请求 ---
-  const [ipipRes, ipApi, ipPure] = await Promise.all([
-    fetchJson('https://myip.ipip.net/json'),
-    fetchJson('http://ip-api.com/json/?lang=zh-CN'),
-    fetchJson('https://my.ippure.com/v1/info')
+  const fmtISP = (isp)=>{
+    if(!isp) return "未知";
+    const s=isp.toLowerCase();
+
+    if(/mobile|cmcc|移动/.test(s)) return "中国移动";
+    if(/telecom|chinanet|电信/.test(s)) return "中国电信";
+    if(/unicom|联通/.test(s)) return "中国联通";
+
+    return isp;
+  };
+
+  const flag=(cc)=>{
+    if(!cc) return "🌐";
+    const c=cc.toUpperCase();
+    return String.fromCodePoint(...c.split('').map(x=>127397+x.charCodeAt()));
+  };
+
+  const device = ctx.device || {};
+
+  const wifi = device.wifi?.ssid;
+  const cellular = device.cellular?.radio;
+
+  const netName = wifi ? wifi : (cellular ? `蜂窝 ${cellular}` : "无网络");
+
+  const [ipapi,ipinfo] = await Promise.allSettled([
+    fetchJson("https://ipapi.co/json/"),
+    fetchJson("https://api.ip.sb/geoip")
   ]);
 
-  // --- 4. 数据预处理 ---
-  const d = ctx.device || {};
-  const ipip = ipipRes?.data || ipipRes || {};
-  const lIp = ipip.ip || "获取失败";
-  const nIp = ipApi?.query || ipPure?.ip || "获取失败";
-  const isProxy = lIp !== nIp && lIp !== "获取失败";
-  
-  // 风险评分预警逻辑
-  const score = ipPure?.fraudScore;
-  let riskTxt = "未知", riskCol = C_SUB;
-  if (score !== undefined) {
-    if (score >= 70) { riskTxt = `极高风险(${score})`; riskCol = "#FF3B30"; }
-    else if (score >= 40) { riskTxt = `中度风险(${score})`; riskCol = "#FF9500"; }
-    else { riskTxt = `纯净低危(${score})`; riskCol = C_GREEN; }
-  }
+  const api1 = ipapi.value || {};
+  const api2 = ipinfo.value || {};
 
-  // ISP 格式化
-  const fmtISP = (isp) => {
-    if (!isp) return "未知运营商";
-    const s = String(isp).toLowerCase();
-    if (/移动|cmcc/i.test(s)) return "中国移动";
-    if (/电信|telecom/i.test(s)) return "中国电信";
-    if (/联通|unicom/i.test(s)) return "中国联通";
-    return isp.split(' ')[0];
-  };
+  const exitIp = api1.ip || api2.ip || "未知";
 
-  // --- 5. 构建 Row 辅助函数 (DSL 适配) ---
-  const Row = (ic, icCol, label, val, valCol) => ({
-    type: 'stack',
-    direction: 'row',
-    alignItems: 'center',
-    gap: 6,
-    children: [
-      { type: 'image', src: `sf-symbol:${ic}`, color: icCol, width: 12, height: 12 },
-      { type: 'text', text: label, font: { size: 11 }, textColor: C_SUB },
-      { type: 'spacer' },
-      { type: 'text', text: val, font: { size: 11, weight: 'semibold', family: 'Menlo' }, textColor: valCol, maxLines: 1, minScale: 0.7 }
+  const country = api1.country_name || api2.country || "";
+  const city = api1.city || api2.city || "";
+
+  const isp = api2.isp || api1.org || "";
+
+  const Row=(icon,color,label,value,valColor)=>({
+    type:'stack',
+    direction:'row',
+    alignItems:'center',
+    gap:6,
+    children:[
+      {
+        type:'image',
+        src:`sf-symbol:${icon}`,
+        width:12,
+        height:12,
+        color:color
+      },
+      {
+        type:'text',
+        text:label,
+        font:{size:11},
+        textColor:C_SUB
+      },
+      {type:'spacer'},
+      {
+        type:'text',
+        text:String(value),
+        font:{size:11,weight:'bold',family:'Menlo'},
+        textColor:valColor,
+        maxLines:1
+      }
     ]
   });
 
-  // --- 6. 返回最终 DSL 对象 ---
   return {
-    type: 'widget',
-    padding: 14,
-    backgroundGradient: {
-      type: 'linear',
-      colors: [{ light: "#F2F2F7", dark: "#0D0D1A" }, { light: "#E5E5EA", dark: "#1C1C2E" }],
-      startPoint: { x: 0, y: 0 },
-      endPoint: { x: 1, y: 1 }
+
+    type:'widget',
+
+    padding:14,
+
+    backgroundGradient:{
+      type:'linear',
+      colors:BG,
+      startPoint:{x:0,y:0},
+      endPoint:{x:1,y:1}
     },
-    children: [
-      // 顶部：网络状态
-      { type: 'stack', direction: 'row', alignItems: 'center', gap: 6, children: [
-          { type: 'image', src: d.wifi?.ssid ? 'sf-symbol:wifi' : 'sf-symbol:antenna.radiowaves.left.and.right', color: C_TITLE, width: 16, height: 16 },
-          { type: 'text', text: d.wifi?.ssid || d.cellular?.radio || "未连接", font: { size: 14, weight: 'heavy' }, textColor: C_TITLE, maxLines: 1 },
-          { type: 'spacer' },
-          { 
-            type: 'stack', 
-            padding: [2, 6], 
-            backgroundColor: isProxy ? "rgba(175,82,222,0.15)" : "rgba(52,199,89,0.15)",
-            borderRadius: 4,
-            children: [
-              { type: 'text', text: isProxy ? 'PROXIED' : 'DIRECT', font: { size: 9, weight: 'black' }, textColor: isProxy ? C_PURPLE : C_GREEN }
-            ]
+
+    children:[
+
+      {
+        type:'stack',
+        direction:'row',
+        alignItems:'center',
+        gap:6,
+        children:[
+
+          {
+            type:'image',
+            src: wifi ? "sf-symbol:wifi" : "sf-symbol:antenna.radiowaves.left.and.right",
+            width:15,
+            height:15,
+            color:C_TITLE
+          },
+
+          {
+            type:'text',
+            text:netName,
+            font:{size:14,weight:'heavy'},
+            textColor:C_TITLE,
+            maxLines:1
+          },
+
+          {type:'spacer'},
+
+          {
+            type:'text',
+            text:"NETWORK",
+            font:{size:9,weight:'black'},
+            textColor:C_GREEN
           }
-      ]},
-      { type: 'spacer', length: 12 },
 
-      // 本地连接信息
-      { type: 'stack', direction: 'column', gap: 5, children: [
-          Row("house.fill", C_BLUE, "内网 IP", d.ipv4?.address || "127.0.0.1", C_MAIN),
-          Row("location.fill", C_BLUE, "本地位置", (ipip.location || []).slice(0, 3).join('') || "未知", C_MAIN),
-      ]},
+        ]
+      },
 
-      { type: 'spacer', length: 8 },
-      { type: 'stack', height: 0.5, backgroundColor: DIVIDER }, // 模拟分割线
-      { type: 'spacer', length: 8 },
+      {type:'spacer',length:12},
 
-      // 代理落地信息
-      { type: 'stack', direction: 'column', gap: 5, children: [
-          Row("network", C_PURPLE, "落地出口", nIp, C_GREEN),
-          Row("mappin.and.ellipse", C_PURPLE, "落地位置", `${ipApi?.country || ''} ${ipApi?.city || ''}`.trim() || "未知", C_MAIN),
-          Row("shield.checkered.fill", riskCol, "风险评级", riskTxt, riskCol)
-      ]},
+      {
+        type:'stack',
+        direction:'column',
+        gap:4,
+        children:[
 
-      { type: 'spacer' },
+          Row("network",C_BLUE,"出口IP",exitIp,C_GREEN),
 
-      // 页脚
-      { type: 'stack', direction: 'row', children: [
-          { type: 'text', text: `GW: ${d.ipv4?.gateway || '192.168.1.1'}`, font: { size: 9 }, textColor: C_SUB },
-          { type: 'spacer' },
-          { type: 'text', text: fmtISP(ipApi?.isp || ipip.location?.[4]), font: { size: 9 }, textColor: C_SUB }
-      ]}
+          Row("mappin.and.ellipse",
+            C_BLUE,
+            "位置",
+            `${flag(api1.country)} ${country} ${city}`,
+            C_MAIN
+          ),
+
+          Row("building.2.fill",
+            C_BLUE,
+            "ISP",
+            fmtISP(isp),
+            C_MAIN
+          ),
+
+          Row("wifi.router.fill",
+            C_BLUE,
+            "网关",
+            device.ipv4?.gateway || "未知",
+            C_MAIN
+          )
+
+        ]
+      },
+
+      {type:'spacer'},
+
+      {
+        type:'stack',
+        direction:'row',
+        children:[
+          {type:'spacer'},
+          {
+            type:'text',
+            text:`IPv4 ${device.ipv4?.address || "-"}`,
+            font:{size:9},
+            textColor:'rgba(255,255,255,0.3)'
+          }
+        ]
+      }
+
     ]
   };
+
 }
