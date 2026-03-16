@@ -1,5 +1,5 @@
 /**
- * 📌 网络·代理·IP纯净度 紧凑不溢出版 修改从ipapi获取
+ * 📌 网络·代理·IP纯净度 IP数据源 ipapi，与上个版本相比修正了布局
  */
 export default async function(ctx) {
   const BG_COLORS = [{ light: '#0D0D1A', dark: '#0D0D1A' }, { light: '#2D1B69', dark: '#0D0D1A' }];
@@ -143,9 +143,12 @@ export default async function(ctx) {
 
   return {
     type: 'widget',
-    padding: [6, 10],
+    // 👇 只改了这里：从 [6,10] 改成 [8,10]，整体往下挪
+    padding: [8, 10],
     backgroundGradient: { type: 'linear', colors: BG_COLORS },
     children: [
+      // 👇 顶部多加一段小间距，让内容不顶头
+      { type: "spacer", length: 2 },
       {
         type: 'stack',
         direction: 'row',
