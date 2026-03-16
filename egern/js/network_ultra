@@ -145,7 +145,7 @@ export default async function(ctx) {
 
   return {
     type: 'widget',
-    padding: [9, 10],
+    padding: [11, 10],
     backgroundGradient: { type: 'linear', colors: BG_COLORS },
     // ✅ 自动刷新已开启
     refreshPolicy: {
