@@ -1,16 +1,15 @@
 /**
  * ==========================================
- * 📌 代码名称: 🌐 全能网络管家 (色彩驱动版)
- * ✨ 核心修正: 
- * 1. 颜色驱动: 延迟 > 300ms 或 风险评分 > 40 自动切红/紫背景。
- * 2. 状态纠正: 引入第三方判定，解决 DIRECT/PROXIED 误报。
- * 3. 视觉对齐: 模仿高亮版，大字号、高对比度。
+ * 📌 代码名称: 🌐 全能网络管家 (高级暗色版)
+ * ✨ 修正重点: 
+ * 1. 布局重构: 解决文字重叠、标题遮挡问题。
+ * 2. 动态氛围: 采用更高级的深色调渐变。
+ * 3. 信息完整: 补齐网络类型、线路、运营商信息。
  * ==========================================
  */
 
 export default async function(ctx) {
-  // --- 1. 强制延迟测试与数据请求 ---
-  const t1 = Date.now();
+  const startTime = Date.now();
   const fetchJson = async (url) => {
     try {
       const resp = await ctx.http.get(url, { timeout: 3500 });
@@ -18,89 +17,80 @@ export default async function(ctx) {
     } catch (e) { return null; }
   };
 
-  // 并行请求：增加一个绝对直连的探测点
   const [ipipRes, ipApi, pureInfo] = await Promise.all([
     fetchJson('https://myip.ipip.net/json'),
     fetchJson('http://ip-api.com/json/?lang=zh-CN'),
     fetchJson('https://my.ippure.com/v1/info')
   ]);
+  const delay = Date.now() - startTime;
+
+  // --- 氛围色彩逻辑 (修正为暗色调) ---
+  let bgColors = ["#0F0C29", "#302B63"]; // 默认：深邃星空蓝 (极速)
+  let statusCol = "#32D74B"; // 绿色状态
   
-  const delay = Date.now() - t1;
-
-  // --- 2. 动态背景颜色判定 (核心修正) ---
-  const risk = pureInfo?.fraudScore || 0;
-  let bgColors = ["#1A2980", "#26D0CE"]; // 默认：清爽蓝 (极速/安全)
-  let statusIcon = "bolt.fill";
-  let statusDesc = "极速";
-
-  if (delay > 500 || risk > 60) {
-    bgColors = ["#ED213A", "#93291E"]; // 红色：警告 (延迟高或风险高)
-    statusIcon = "exclamationmark.shield.fill";
-    statusDesc = "较差";
-  } else if (delay > 200 || risk > 20) {
-    bgColors = ["#4B0082", "#000000"]; // 紫色：一般
-    statusIcon = "info.circle.fill";
-    statusDesc = "一般";
+  if (delay > 500) {
+    bgColors = ["#200122", "#6f0000"]; // 暗红焦糖 (较差)
+    statusCol = "#FF453A";
+  } else if (delay > 250) {
+    bgColors = ["#141E30", "#243B55"]; // 灰蓝 (一般)
+    statusCol = "#FFD700";
   }
 
-  // --- 3. 逻辑处理 ---
   const d = ctx.device || {};
   const ipip = ipipRes?.data || ipipRes || {};
-  const nIp = ipApi?.query || ipip.ip || "Unknown";
-  // 判定逻辑：如果 ip-api 返回的不是中国，或者与本地 IP 不同，判定为 PROXIED
+  const risk = pureInfo?.fraudScore || 0;
   const isProxy = ipApi?.countryCode !== 'CN' || (ipip.ip && ipip.ip !== d.ipv4?.address);
 
-  // --- 4. 视觉组件 (对齐红色版) ---
+  // --- UI 构建函数 (使用 flex 解决溢出) ---
   const Row = (ic, label, val, valCol = "#FFFFFF") => ({
-    type: 'stack', direction: 'row', alignItems: 'center', gap: 10,
+    type: 'stack', direction: 'row', alignItems: 'center',
     children: [
-      { type: 'image', src: `sf-symbol:${ic}`, color: "#FFFFFF", width: 15, height: 15 },
-      { type: 'text', text: label, font: { size: 14, weight: 'medium' }, textColor: "#FFFFFFCC" },
-      { type: 'spacer' },
-      { type: 'text', text: String(val), font: { size: 14, weight: 'bold', family: 'Menlo' }, textColor: valCol }
+      { type: 'image', src: `sf-symbol:${ic}`, color: "#FFFFFF", opacity: 0.7, width: 13, height: 13 },
+      { type: 'spacer', length: 8 },
+      { type: 'text', text: label, font: { size: 12 }, textColor: "#FFFFFFB0" },
+      { type: 'spacer' }, // 自动推开
+      { type: 'text', text: String(val), font: { size: 12, weight: 'bold', family: 'Menlo' }, textColor: valCol, textAlign: 'right' }
     ]
   });
 
-  // --- 5. DSL 返回 ---
   return {
     type: 'widget',
-    padding: 16,
+    padding: 15,
     backgroundGradient: {
       type: 'linear', colors: bgColors, startPoint: { x: 0, y: 0 }, endPoint: { x: 1, y: 1 }
     },
     children: [
-      // 头部：大标题
+      // 头部：紧凑布局
       { type: 'stack', direction: 'row', alignItems: 'center', children: [
-          { type: 'image', src: 'sf-symbol:antenna.radiowaves.left.and.right', color: "#FFFFFF", width: 20, height: 20 },
-          { type: 'spacer', length: 10 },
-          { type: 'text', text: d.wifi?.ssid || d.cellular?.radio || "NETWORK", font: { size: 20, weight: 'black' }, textColor: "#FFFFFF" },
+          { type: 'image', src: 'sf-symbol:wifi', color: "#FFFFFF", width: 16, height: 16 },
+          { type: 'spacer', length: 6 },
+          { type: 'text', text: d.wifi?.ssid || d.cellular?.radio || "NETWORK", font: { size: 16, weight: 'heavy' }, textColor: "#FFFFFF" },
           { type: 'spacer' },
           { 
-            type: 'stack', padding: [4, 8], backgroundColor: "rgba(255,255,255,0.2)", borderRadius: 6,
-            children: [{ type: 'text', text: isProxy ? "PROXIED" : "DIRECT", font: { size: 10, weight: 'heavy' }, textColor: "#FFFFFF" }]
+            type: 'stack', padding: [2, 6], backgroundColor: "rgba(255,255,255,0.15)", borderRadius: 4,
+            children: [{ type: 'text', text: isProxy ? "PROXIED" : "DIRECT", font: { size: 9, weight: 'black' }, textColor: isProxy ? "#BF5AF2" : "#32D74B" }]
           }
       ]},
 
-      { type: 'spacer', length: 15 },
+      { type: 'spacer', length: 12 },
 
-      // 内容区
-      { type: 'stack', direction: 'column', gap: 10, children: [
-          Row("house.fill", "内网 IP", d.ipv4?.address || "127.0.0.1"),
-          Row("globe", "公网 IP", nIp, "#58FFAB"),
-          Row("location.fill", "归属地", `${ipApi?.country || ''} ${ipApi?.city || ''}`.trim() || "未知"),
-          Row("shield.fill", "风险评估", `Score: ${risk}`, risk > 40 ? "#FFD700" : "#FFFFFF"),
-          Row("timer", "实时延迟", `${delay} ms`, delay > 400 ? "#FFD700" : "#FFFFFF")
+      // 信息区 (补齐你之前要求的信息)
+      { type: 'stack', direction: 'column', gap: 6, children: [
+          Row("house.fill", "内网 IPv4", d.ipv4?.address || "127.0.0.1"),
+          Row("globe", "公网出口", ipApi?.query || ipip.ip || "获取中...", statusCol),
+          Row("location.fill", "归属位置", `${ipApi?.country || ''} ${ipApi?.city || ''}`.trim() || "未知"),
+          Row("server.rack.fill", "线路类型", pureInfo?.isResidential ? "原生住宅" : "机房/数据中心"),
+          Row("shield.fill", "风险评估", `Score: ${risk}`, risk > 40 ? "#FFD700" : "#32D74B"),
+          Row("timer", "实时延迟", `${delay} ms`, statusCol)
       ]},
 
       { type: 'spacer' },
 
-      // 页脚
-      { type: 'stack', direction: 'row', opacity: 0.8, children: [
-          { type: 'image', src: `sf-symbol:${statusIcon}`, color: "#FFFFFF", width: 12, height: 12 },
-          { type: 'spacer', length: 4 },
-          { type: 'text', text: `网络状态: ${statusDesc}`, font: { size: 11, weight: 'bold' }, textColor: "#FFFFFF" },
+      // 页脚：运营商
+      { type: 'stack', direction: 'row', opacity: 0.6, children: [
+          { type: 'text', text: `GW: ${d.ipv4?.gateway || "192.168.1.1"}`, font: { size: 10 }, textColor: "#FFFFFF" },
           { type: 'spacer' },
-          { type: 'text', text: `ISP: ${ipApi?.isp || "Unknown"}`, font: { size: 11 }, textColor: "#FFFFFF" }
+          { type: 'text', text: `ISP: ${ipApi?.isp || "Unknown"}`, font: { size: 10 }, textColor: "#FFFFFF" }
       ]}
     ]
   };
