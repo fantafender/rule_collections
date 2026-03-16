@@ -1,201 +1,28 @@
-/**
- * 🌐 全能网络管家 (Egern 稳定版)
- * 兼容 Egern Widget Runtime
- */
+const resp = await $http.get("https://api.ip.sb/ip")
+const ip = resp.body
 
-export default async function(ctx) {
+return {
+  type: "widget",
+  padding: 12,
+  children: [
 
-  const BG = [{ light:'#0D0D1A', dark:'#0D0D1A'}, { light:'#1C1C2E', dark:'#1C1C2E'}];
-
-  const C_TITLE = { light:'#FFD700', dark:'#FFD700'};
-  const C_SUB = { light:'#A2A2B5', dark:'#A2A2B5'};
-  const C_MAIN = { light:'#FFFFFF', dark:'#FFFFFF'};
-  const C_GREEN = { light:'#32D74B', dark:'#32D74B'};
-  const C_BLUE = { light:'#00AAE4', dark:'#00AAE4'};
-  const C_PURPLE = { light:'#AF52DE', dark:'#BF5AF2'};
-
-  const fetchJson = async (url) => {
-    try {
-      const res = await ctx.fetch(url,{
-        headers:{'User-Agent':'Mozilla/5.0'},
-        timeout:5000
-      });
-      return await res.json();
-    } catch(e){
-      return {};
+    {
+      type: "stack",
+      direction: "row",
+      children: [
+        {
+          type: "text",
+          text: "当前IP",
+          font: { size: 12 }
+        },
+        { type: "spacer" },
+        {
+          type: "text",
+          text: ip,
+          font: { size: 12 }
+        }
+      ]
     }
-  };
 
-  const fmtISP = (isp)=>{
-    if(!isp) return "未知";
-    const s=isp.toLowerCase();
-
-    if(/mobile|cmcc|移动/.test(s)) return "中国移动";
-    if(/telecom|chinanet|电信/.test(s)) return "中国电信";
-    if(/unicom|联通/.test(s)) return "中国联通";
-
-    return isp;
-  };
-
-  const flag=(cc)=>{
-    if(!cc) return "🌐";
-    const c=cc.toUpperCase();
-    return String.fromCodePoint(...c.split('').map(x=>127397+x.charCodeAt()));
-  };
-
-  const device = ctx.device || {};
-
-  const wifi = device.wifi?.ssid;
-  const cellular = device.cellular?.radio;
-
-  const netName = wifi ? wifi : (cellular ? `蜂窝 ${cellular}` : "无网络");
-
-  const [ipapi,ipinfo] = await Promise.allSettled([
-    fetchJson("https://ipapi.co/json/"),
-    fetchJson("https://api.ip.sb/geoip")
-  ]);
-
-  const api1 = ipapi.value || {};
-  const api2 = ipinfo.value || {};
-
-  const exitIp = api1.ip || api2.ip || "未知";
-
-  const country = api1.country_name || api2.country || "";
-  const city = api1.city || api2.city || "";
-
-  const isp = api2.isp || api1.org || "";
-
-  const Row=(icon,color,label,value,valColor)=>({
-    type:'stack',
-    direction:'row',
-    alignItems:'center',
-    gap:6,
-    children:[
-      {
-        type:'image',
-        src:`sf-symbol:${icon}`,
-        width:12,
-        height:12,
-        color:color
-      },
-      {
-        type:'text',
-        text:label,
-        font:{size:11},
-        textColor:C_SUB
-      },
-      {type:'spacer'},
-      {
-        type:'text',
-        text:String(value),
-        font:{size:11,weight:'bold',family:'Menlo'},
-        textColor:valColor,
-        maxLines:1
-      }
-    ]
-  });
-
-  return {
-
-    type:'widget',
-
-    padding:14,
-
-    backgroundGradient:{
-      type:'linear',
-      colors:BG,
-      startPoint:{x:0,y:0},
-      endPoint:{x:1,y:1}
-    },
-
-    children:[
-
-      {
-        type:'stack',
-        direction:'row',
-        alignItems:'center',
-        gap:6,
-        children:[
-
-          {
-            type:'image',
-            src: wifi ? "sf-symbol:wifi" : "sf-symbol:antenna.radiowaves.left.and.right",
-            width:15,
-            height:15,
-            color:C_TITLE
-          },
-
-          {
-            type:'text',
-            text:netName,
-            font:{size:14,weight:'heavy'},
-            textColor:C_TITLE,
-            maxLines:1
-          },
-
-          {type:'spacer'},
-
-          {
-            type:'text',
-            text:"NETWORK",
-            font:{size:9,weight:'black'},
-            textColor:C_GREEN
-          }
-
-        ]
-      },
-
-      {type:'spacer',length:12},
-
-      {
-        type:'stack',
-        direction:'column',
-        gap:4,
-        children:[
-
-          Row("network",C_BLUE,"出口IP",exitIp,C_GREEN),
-
-          Row("mappin.and.ellipse",
-            C_BLUE,
-            "位置",
-            `${flag(api1.country)} ${country} ${city}`,
-            C_MAIN
-          ),
-
-          Row("building.2.fill",
-            C_BLUE,
-            "ISP",
-            fmtISP(isp),
-            C_MAIN
-          ),
-
-          Row("wifi.router.fill",
-            C_BLUE,
-            "网关",
-            device.ipv4?.gateway || "未知",
-            C_MAIN
-          )
-
-        ]
-      },
-
-      {type:'spacer'},
-
-      {
-        type:'stack',
-        direction:'row',
-        children:[
-          {type:'spacer'},
-          {
-            type:'text',
-            text:`IPv4 ${device.ipv4?.address || "-"}`,
-            font:{size:9},
-            textColor:'rgba(255,255,255,0.3)'
-          }
-        ]
-      }
-
-    ]
-  };
-
+  ]
 }
