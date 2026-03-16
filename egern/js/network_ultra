@@ -47,4 +47,61 @@ export default async function(ctx) {
   const d = ctx.device || {};
   const ipip = ipipRes?.data || ipipRes || {};
   const nIp = ipApi?.query || ipip.ip || "Unknown";
-  // 判定逻辑：如果 ip-api 返回的不是中国，或者与
+  // 判定逻辑：如果 ip-api 返回的不是中国，或者与本地 IP 不同，判定为 PROXIED
+  const isProxy = ipApi?.countryCode !== 'CN' || (ipip.ip && ipip.ip !== d.ipv4?.address);
+
+  // --- 4. 视觉组件 (对齐红色版) ---
+  const Row = (ic, label, val, valCol = "#FFFFFF") => ({
+    type: 'stack', direction: 'row', alignItems: 'center', gap: 10,
+    children: [
+      { type: 'image', src: `sf-symbol:${ic}`, color: "#FFFFFF", width: 15, height: 15 },
+      { type: 'text', text: label, font: { size: 14, weight: 'medium' }, textColor: "#FFFFFFCC" },
+      { type: 'spacer' },
+      { type: 'text', text: String(val), font: { size: 14, weight: 'bold', family: 'Menlo' }, textColor: valCol }
+    ]
+  });
+
+  // --- 5. DSL 返回 ---
+  return {
+    type: 'widget',
+    padding: 16,
+    backgroundGradient: {
+      type: 'linear', colors: bgColors, startPoint: { x: 0, y: 0 }, endPoint: { x: 1, y: 1 }
+    },
+    children: [
+      // 头部：大标题
+      { type: 'stack', direction: 'row', alignItems: 'center', children: [
+          { type: 'image', src: 'sf-symbol:antenna.radiowaves.left.and.right', color: "#FFFFFF", width: 20, height: 20 },
+          { type: 'spacer', length: 10 },
+          { type: 'text', text: d.wifi?.ssid || d.cellular?.radio || "NETWORK", font: { size: 20, weight: 'black' }, textColor: "#FFFFFF" },
+          { type: 'spacer' },
+          { 
+            type: 'stack', padding: [4, 8], backgroundColor: "rgba(255,255,255,0.2)", borderRadius: 6,
+            children: [{ type: 'text', text: isProxy ? "PROXIED" : "DIRECT", font: { size: 10, weight: 'heavy' }, textColor: "#FFFFFF" }]
+          }
+      ]},
+
+      { type: 'spacer', length: 15 },
+
+      // 内容区
+      { type: 'stack', direction: 'column', gap: 10, children: [
+          Row("house.fill", "内网 IP", d.ipv4?.address || "127.0.0.1"),
+          Row("globe", "公网 IP", nIp, "#58FFAB"),
+          Row("location.fill", "归属地", `${ipApi?.country || ''} ${ipApi?.city || ''}`.trim() || "未知"),
+          Row("shield.fill", "风险评估", `Score: ${risk}`, risk > 40 ? "#FFD700" : "#FFFFFF"),
+          Row("timer", "实时延迟", `${delay} ms`, delay > 400 ? "#FFD700" : "#FFFFFF")
+      ]},
+
+      { type: 'spacer' },
+
+      // 页脚
+      { type: 'stack', direction: 'row', opacity: 0.8, children: [
+          { type: 'image', src: `sf-symbol:${statusIcon}`, color: "#FFFFFF", width: 12, height: 12 },
+          { type: 'spacer', length: 4 },
+          { type: 'text', text: `网络状态: ${statusDesc}`, font: { size: 11, weight: 'bold' }, textColor: "#FFFFFF" },
+          { type: 'spacer' },
+          { type: 'text', text: `ISP: ${ipApi?.isp || "Unknown"}`, font: { size: 11 }, textColor: "#FFFFFF" }
+      ]}
+    ]
+  };
+}
