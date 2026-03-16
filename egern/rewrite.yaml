@@ -1,3 +1,5 @@
+name: "rewrite_test"
+description: "surge重写规则测试"
 url_rewrites:
 - match: ^http:\/\/www\.google\.cn
   location: https://www.google.com
