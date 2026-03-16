@@ -143,8 +143,8 @@ export default async function(ctx) {
 
   return {
     type: 'widget',
-    // 👇 只改了这里：从 [6,10] 改成 [8,10]，整体往下挪
-    padding: [8, 10],
+    // 👇 只改了这里：从 [6,10] 改成 [10,10]，整体往下挪
+    padding: [10, 10],
     backgroundGradient: { type: 'linear', colors: BG_COLORS },
     children: [
       // 👇 顶部多加一段小间距，让内容不顶头
