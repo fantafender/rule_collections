@@ -1,26 +1,150 @@
+/**
+ * ==========================================
+ * 📌 代码名称: 🌐 全能网络管家 (Ultimate Pro)
+ * ✨ 特色功能: 
+ * 1. 链路识别: 精准识别 5G SA/NSA、Wi-Fi SSID。
+ * 2. 延迟染色: 根据延迟自动切换背景/文字颜色 (绿/橙/红)。
+ * 3. 归属分析: 显示运营商简称 (如 CMHK/CTM) 及地理位置。
+ * 4. 出口画像: 识别 ASN 组织 (如 xTom) 及属性 (机房/家宽)。
+ * ⏱️ 更新时间: 2026-03-16
+ * ==========================================
+ */
+
 export default async function(ctx) {
+  // --- 1. 颜色与样式规范 ---
+  const C_SUB = { light: "#8E8E93", dark: "#A2A2B5" };
+  const C_MAIN = { light: "#1C1C1E", dark: "#FFFFFF" };
+  const C_GOLD = { light: "#B8860B", dark: "#FFD700" };
 
-  const resp = await ctx.http.get("https://api.ip.sb/ip")
-  const ip = await resp.text()
+  // --- 2. 逻辑函数 ---
+  const fetchJson = async (url) => {
+    try {
+      const resp = await ctx.http.get(url, { timeout: 3500 });
+      return await resp.json();
+    } catch (e) { return null; }
+  };
 
-  return {
-    type: "widget",
-    padding: 12,
-    children: [
-      {
-        type: "text",
-        text: "Current IP",
-        font: { size: "body" },
-        textColor: "#ffffff"
-      },
-      {
-        type: "text",
-        text: ip,
-        font: { size: "headline", weight: "bold" },
-        textColor: "#ffffff"
-      }
-    ],
-    backgroundColor: "#1A1A2E"
+  // 网络类型转换
+  const getNetType = (d) => {
+    if (d.wifi?.ssid) return d.wifi.ssid;
+    const radio = d.cellular?.radio || "";
+    if (radio.includes("NRNSA")) return "5G NSA";
+    if (radio.includes("NR")) return "5G SA";
+    if (radio.includes("LTE")) return "4G/LTE";
+    return radio || "未连接";
+  };
+
+  // 延迟检测
+  const getLatency = async () => {
+    const start = Date.now();
+    try {
+      await ctx.http.get('http://www.google.com/generate_204', { timeout: 3000 });
+      return Date.now() - start;
+    } catch (e) { return -1; }
+  };
+
+  // --- 3. 并行数据请求 ---
+  const [ipipRes, ipApi, pureInfo, ms] = await Promise.all([
+    fetchJson('https://myip.ipip.net/json'),
+    fetchJson('http://ip-api.com/json/?lang=zh-CN&fields=status,country,city,isp,as,org,query'),
+    fetchJson('https://my.ippure.com/v1/info'),
+    getLatency()
+  ]);
+
+  // --- 4. 数据预处理 ---
+  const d = ctx.device || {};
+  const ipip = ipipRes?.data || ipipRes || {};
+  const lIp = ipip.ip || "获取失败";
+  const nIp = ipApi?.query || pureInfo?.ip || "获取失败";
+  const isProxy = (lIp !== nIp) && lIp !== "获取失败";
+
+  // 延迟染色逻辑
+  let latCol = { light: "#28CD41", dark: "#32D74B" }; // 默认绿色
+  let latBg = "rgba(50,215,75,0.1)";
+  if (ms > 300 || ms === -1) {
+    latCol = { light: "#FF3B30", dark: "#FF453A" }; // 红色
+    latBg = "rgba(255,59,48,0.1)";
+  } else if (ms > 100) {
+    latCol = { light: "#FF9500", dark: "#FF9F0A" }; // 橙色
+    latBg = "rgba(255,149,0,0.1)";
   }
 
+  // 出口属性画像 (ASN + 属性)
+  const asnOrg = (ipApi?.as || "").split(' ')[1] || (ipApi?.org || "Unknown");
+  const netAttr = pureInfo?.isResidential ? "家宽" : "数据中心";
+  const nodeDesc = `${asnOrg} · ${netAttr}`;
+
+  // 直连归属地与运营商 (CMHK, CTM, etc.)
+  const getIspName = (isp, loc) => {
+    if (!isp) return loc || "未知";
+    const name = isp.toUpperCase();
+    let shortName = isp;
+    if (name.includes("CMHK")) shortName = "CMHK";
+    else if (name.includes("CSL")) shortName = "CSL";
+    else if (name.includes("CTM")) shortName = "CTM";
+    else if (name.includes("SMARTONE")) shortName = "SmarTone";
+    else if (name.includes("MOBILE")) shortName = "中国移动";
+    else if (name.includes("TELECOM")) shortName = "中国电信";
+    else if (name.includes("UNICOM")) shortName = "中国联通";
+    return `${loc} ${shortName}`.trim();
+  };
+  const localFull = getIspName(ipip.location?.[4], (ipip.location || []).slice(0, 3).join(''));
+
+  // --- 5. UI 组件渲染 ---
+  const Row = (ic, icCol, label, val, valCol) => ({
+    type: 'stack', direction: 'row', alignItems: 'center', gap: 6,
+    children: [
+      { type: 'image', src: `sf-symbol:${ic}`, color: icCol, width: 12, height: 12 },
+      { type: 'text', text: label, font: { size: 'caption2' }, textColor: C_SUB },
+      { type: 'spacer' },
+      { type: 'text', text: String(val), font: { size: 'caption2', weight: 'semibold', family: 'Menlo' }, textColor: valCol, maxLines: 1, minScale: 0.7 }
+    ]
+  });
+
+  return {
+    type: 'widget',
+    padding: 14,
+    backgroundColor: { light: "#FFFFFF", dark: "#0D0D1A" },
+    children: [
+      // 头部 (网络类型 + 延迟标签)
+      { type: 'stack', direction: 'row', alignItems: 'center', children: [
+          { type: 'image', src: d.wifi?.ssid ? 'sf-symbol:wifi' : 'sf-symbol:antenna.radiowaves.left.and.right', color: C_GOLD, width: 16, height: 16 },
+          { type: 'spacer', length: 6 },
+          { type: 'text', text: getNetType(d), font: { size: 'headline', weight: 'heavy' }, textColor: C_GOLD, maxLines: 1 },
+          { type: 'spacer' },
+          { 
+            type: 'stack', 
+            padding: [2, 6], 
+            backgroundColor: latBg, 
+            borderRadius: 4, 
+            children: [
+              { type: 'text', text: ms === -1 ? "Timeout" : `${ms}ms`, font: { size: 10, weight: 'bold' }, textColor: latCol }
+            ] 
+          }
+      ]},
+
+      { type: 'spacer', length: 14 },
+
+      // 本地层
+      { type: 'stack', direction: 'column', gap: 5, children: [
+          Row("house.fill", "#007AFF", "内网 IP", d.ipv4?.address || "127.0.0.1", C_MAIN),
+          Row("location.fill", "#007AFF", "直连归属", localFull || "检测中...", C_MAIN),
+          Row("wifi.router.fill", "#007AFF", "路由网关", d.ipv4?.gateway || "192.168.1.1", C_MAIN),
+      ]},
+
+      { type: 'spacer', length: 8 },
+      { type: 'stack', height: 0.5, backgroundColor: { light: "rgba(0,0,0,0.1)", dark: "rgba(255,255,255,0.1)" } },
+      { type: 'spacer', length: 8 },
+
+      // 落地层
+      { type: 'stack', direction: 'column', gap: 5, children: [
+          Row("network", "#AF52DE", "出口 IP", nIp, isProxy ? "#AF52DE" : "#32D74B"),
+          Row("building.2.fill", "#AF52DE", "出口线路", nodeDesc, C_MAIN),
+          Row("mappin.and.ellipse", "#AF52DE", "落地位置", `${ipApi?.country || ''} ${ipApi?.city || ''}`.trim() || "检测中...", C_MAIN),
+          Row("shield.fill", latCol, "风险评估", pureInfo?.fraudScore !== undefined ? `Score: ${pureInfo.fraudScore}` : "检测中...", latCol)
+      ]},
+      
+      { type: 'spacer' }
+    ]
+  };
 }
