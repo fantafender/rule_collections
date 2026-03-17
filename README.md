@@ -17,4 +17,8 @@ https://github.com/fantafender/rule_collections/blob/main/egern/rewrite.yaml
 2. 切换节点后刷新，留有1200ms容错来获取网络数据
 https://raw.githubusercontent.com/fantafender/rule_collections/refs/heads/main/egern/js/Network_monitor
 
-## network_ultra 不稳定测试版
+## network_ultra 
+增强了全球直连ip运营商显示
+https://raw.githubusercontent.com/fantafender/rule_collections/refs/heads/main/egern/js/network_ultra
+<img width="2388" height="1368" alt="image" src="https://github.com/user-attachments/assets/85488143-502f-4243-a415-f93953cd4ae4" />
+
