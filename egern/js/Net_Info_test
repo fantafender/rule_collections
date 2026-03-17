@@ -1,5 +1,6 @@
 /**
- * 📌  ASN失败兜底 · 样式精简 · 深度流媒体解锁
+ * 📌 深度流媒体解锁看板 Pro (集成 IP.Check.Place 核心逻辑版)
+ * 优化点：针对 GPT/Gemini/TikTok 进行重定向与关键词过滤
  */
 export default async function(ctx) {
   const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
@@ -9,30 +10,20 @@ export default async function(ctx) {
   const C_GREEN = { light: '#34C759', dark: '#30D158' };
   const C_ORANGE= { light: '#FF9500', dark: '#FF9F0A' };
   const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
-  const C_YELLOW= { light: '#FFCC00', dark: '#FFD60A' };
 
-  // 模拟真实浏览器 UA
   const BASE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
 
-  // ===================== 【运营商识别逻辑】 =====================
+  // ===================== 【辅助函数】 =====================
   function getISPByASN(asn) {
     const asnCode = (asn || '').trim().replace(/^AS/, '');
-    switch (asnCode) {
-      case '9231': return 'CMHK';
-      case '9381': return 'CTHK';
-      case '4609': return 'CTM';
-      default: return null;
-    }
+    const map = { '9231': 'CMHK', '9381': 'CTHK', '4609': 'CTM' };
+    return map[asnCode] || null;
   }
 
   function getISPByIPIP(rawIsp, locArr) {
     const s = (rawIsp || '').toLowerCase();
     const area1 = (locArr[1] || '').toLowerCase();
-    if (area1.includes('香港')) {
-      if (s.includes('mobile') || s.includes('移动')) return 'CMHK';
-      if (s.includes('telecom') || s.includes('电信')) return 'CTHK';
-      return '香港运营商';
-    }
+    if (area1.includes('香港')) return s.includes('mobile') ? 'CMHK' : '香港运营商';
     if (area1.includes('澳门')) return 'CTM';
     if (/(移动|cmcc)/i.test(s)) return '中国移动';
     if (/(电信|chinanet)/i.test(s)) return '中国电信';
@@ -40,91 +31,80 @@ export default async function(ctx) {
     return '未知运营商';
   }
 
-  const DEFAULT_ISP = '未知运营商';
   const cityMap = { tokyo: '东京', osaka: '大阪', kyoto: '京都' };
-  const regionMap = { tokyo: '东京都', osaka: '大阪府' };
 
-  await new Promise(resolve => setTimeout(resolve, 1200));
-
-  const d = ctx.device || {};
-  const isWifi = !!d.wifi?.ssid;
-  let netName = "未连接", netIcon = "antenna.radiowaves.left.and.right";
-  if (isWifi) {
-    netName = d.wifi.ssid || "Wi‑Fi";
-    netIcon = "wifi";
-  } else if (d.cellular?.radio) {
-    const radioMap = { "GPRS": "2.5G", "EDGE": "2.75G", "WCDMA": "3G", "LTE": "4G", "NR": "5G", "NRNSA": "5G" };
-    netName = `蜂窝: ${radioMap[d.cellular.radio?.toUpperCase()] || "5G"}`;
-  }
-
-  // —————————————————— 直连IP + 落地IP ——————————————————
-  let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "";
-  let nIp = "—", nLoc = "—", asnInfo = "—", countryCode = "XX";
-
-  // 并行获取基础 IP 信息
-  const fetchBaseInfo = async () => {
-    try {
-      const [ipipRes, ipinfoRes] = await Promise.all([
-        ctx.http.get('https://myip.ipip.net/json', { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 5000 }).catch(() => null),
-        ctx.http.get('https://ipinfo.io/json', { timeout: 5000 }).catch(() => null)
-      ]);
-
-      if (ipipRes) {
-        const body = await ipipRes.json();
-        pubIp = body.data?.ip || "—";
-        const locArr = body.data?.location || [];
-        pubLoc = `🇨🇳 ${locArr[1] || ""} ${locArr[2] || ""}`.trim();
-        try {
-          const asnRes = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { timeout: 2000 });
-          pubASN = (await asnRes.text()).trim();
-        } catch(e) {}
-        pubIsp = getISPByASN(pubASN) || getISPByIPIP(locArr[4] || locArr[3], locArr) || DEFAULT_ISP;
-      }
-
-      if (ipinfoRes) {
-        const dt = await ipinfoRes.json();
-        nIp = dt.ip || "—";
-        countryCode = (dt.country || "XX").toUpperCase();
-        const flag = dt.country ? String.fromCodePoint(...dt.country.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) : "🌐";
-        const city = cityMap[dt.city?.toLowerCase()] || dt.city || "";
-        const region = regionMap[dt.region?.toLowerCase()] || dt.region || "";
-        nLoc = city === region ? `${flag} ${city}` : `${flag} ${region} ${city}`;
-        asnInfo = dt.org || "—";
-      }
-    } catch(e) {}
-  };
-
-  // —————————————————— 🔥 解锁深度检测 ——————————————————
+  // —————————————————— 🔥 深度解锁检测引擎 ——————————————————
   const checkPlatform = async (name, url, isNetflix = false) => {
     try {
+      const isAI = name === "GPT" || name === "Gemini";
       const res = await ctx.http.get(url, {
-        timeout: 4000,
-        headers: { "User-Agent": BASE_UA, "Accept-Language": "de-AT,de;q=0.9,en-AT;q=0.8,en;q=0.7" },
-        followRedirect: false
+        timeout: 4500,
+        headers: { 
+          "User-Agent": BASE_UA, 
+          "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8", // 针对日本 IP 优化
+          "Referer": "https://www.google.com/" 
+        },
+        followRedirect: isAI ? true : false // AI 类需跟随重定向判断最终 URL
       });
 
+      // 1. Netflix 深度检测 (基于 Header)
       if (isNetflix) {
         if (res.status === 200) {
-          const reg = res.headers["x-netflix-originating-env"];
+          const reg = res.headers["x-netflix-originating-env"] || res.headers["X-Netflix-Originating-Env"];
           return { name, region: reg ? reg.toUpperCase() : countryCode };
         }
         const res2 = await ctx.http.get("https://www.netflix.com/title/81215567", { timeout: 3000 });
         return { name, region: res2.status === 200 ? "🍿" : "❌" };
       }
 
-      // GPT/Gemini/Disney/TikTok 通用判定
-      const isOk = (res.status === 200 && !res.url.includes("error") && !res.url.includes("preview")) || res.status === 302;
-      return { name, region: isOk ? countryCode : "❌" };
+      // 2. AI/Disney 关键词过滤逻辑
+      const finalUrl = res.url || "";
+      const isBlocked = finalUrl.includes("unsupported") || finalUrl.includes("error") || finalUrl.includes("preview");
+      
+      // GPT 特殊判定：302 到登录页也算 OK
+      if (name === "GPT") {
+        if (res.status === 200 || res.status === 302) return { name, region: countryCode };
+      }
+
+      if (res.status === 200 && !isBlocked) {
+        return { name, region: countryCode };
+      }
+      return { name, region: "❌" };
     } catch (e) {
       return { name, region: "❌" };
     }
   };
 
-  // —————————————————— 执行所有任务 ——————————————————
+  // —————————————————— 数据抓取 ——————————————————
+  let pubIp = "—", pubLoc = "—", pubIsp = "未知", pubASN = "", nIp = "—", nLoc = "—", asnInfo = "—", countryCode = "XX";
+
+  const fetchBaseInfo = async () => {
+    try {
+      const [ipipRes, ipinfoRes] = await Promise.all([
+        ctx.http.get('https://myip.ipip.net/json', { timeout: 4000 }).catch(() => null),
+        ctx.http.get('https://ipinfo.io/json', { timeout: 4000 }).catch(() => null)
+      ]);
+      if (ipipRes) {
+        const body = await ipipRes.json();
+        pubIp = body.data?.ip || "—";
+        const locArr = body.data?.location || [];
+        pubLoc = `🇨🇳 ${locArr[1] || ""} ${locArr[2] || ""}`.trim();
+        pubIsp = getISPByASN(pubASN) || getISPByIPIP(locArr[4] || locArr[3], locArr);
+      }
+      if (ipinfoRes) {
+        const dt = await ipinfoRes.json();
+        nIp = dt.ip; countryCode = (dt.country || "XX").toUpperCase();
+        const flag = dt.country ? String.fromCodePoint(...dt.country.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) : "🌐";
+        nLoc = `${flag} ${dt.region || ""} ${cityMap[dt.city?.toLowerCase()] || dt.city || ""}`;
+        asnInfo = dt.org || "—";
+      }
+    } catch(e) {}
+  };
+
   const start = Date.now();
   const [_, ipRes, results] = await Promise.all([
     fetchBaseInfo(),
-    ctx.http.get('https://my.ippure.com/v1/info', { timeout: 5000 }).catch(() => null),
+    ctx.http.get('https://my.ippure.com/v1/info', { timeout: 4000 }).catch(() => null),
     Promise.all([
       checkPlatform("GPT", "https://chatgpt.com/auth/login"),
       checkPlatform("奈飞", "https://www.netflix.com/title/80018499", true),
@@ -133,12 +113,8 @@ export default async function(ctx) {
       checkPlatform("Disney", "https://www.disneyplus.com")
     ])
   ]);
-  const costTime = Date.now() - start;
 
-  // 格式化解锁输出
   const unlockText = results.map(r => `${r.name} ${r.region}`).join("，");
-
-  // 风险得分解析
   let ipData = {}; try { if (ipRes) ipData = await ipRes.json(); } catch(e) {}
   const risk = ipData.fraudScore;
   let riskTxt = "…", riskCol = C_SUB, riskIcon = "clock";
@@ -159,22 +135,19 @@ export default async function(ctx) {
     ]
   });
 
+  const d = ctx.device || {};
+  const netName = d.wifi?.ssid ? d.wifi.ssid : "蜂窝网络";
+
   return {
-    type: 'widget',
-    padding: [8, 10],
-    backgroundColor: BG_CARD,
-    cornerRadius: 12,
+    type: 'widget', padding: [8, 10], backgroundColor: BG_CARD, cornerRadius: 12,
     children: [
-      {
-        type: 'stack', direction: 'row', alignItems: 'center', padding: [2,0,4,0],
-        children: [
-          { type: 'image', src: `sf-symbol:${netIcon}`, color: C_BLUE, width:14, height:14 },
+      { type: 'stack', direction: 'row', alignItems: 'center', padding: [2,0,4,0], children: [
+          { type: 'image', src: `sf-symbol:network`, color: C_BLUE, width:14, height:14 },
           { type: 'spacer', length:5 },
           { type: 'text', text: netName, font: { size:13, weight:'semibold' }, textColor: C_TEXT },
           { type: 'spacer' },
-          { type: 'text', text: `${costTime}ms`, font: { size:12, weight:'medium' }, textColor: costTime < 200 ? C_GREEN : C_ORANGE }
-        ]
-      },
+          { type: 'text', text: `${Date.now() - start}ms`, font: { size:11 }, textColor: C_GREEN }
+      ]},
       Row("globe", C_BLUE, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT),
       Row("mappin", C_SUB, "位置", pubLoc, C_TEXT),
       Row("paperplane.fill", C_BLUE, "落地IP", `${nIp} ${ipData.isResidential ? "🏠" : "🏢"}`, C_TEXT),
