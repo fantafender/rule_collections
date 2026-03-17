@@ -90,20 +90,34 @@ export default async function(ctx) {
     netName = `蜂窝: ${map[r] || r || "5G"}`;
   }
 
-  // ===================== 🔥 核心：流媒体/AI解锁检测（集成你的三段式逻辑）=====================
-  // 1. Netflix 三段式检测（全解锁/半解锁/未解锁）
+  // ===================== 先获取出口IP的国家代码（用于兜底）=====================
+  let countryCode = "XX"; // 兜底默认值
+  const getCountryCode = async () => {
+    try {
+      const res = await ctx.http.get("https://ipinfo.io/json", { timeout: 3000 });
+      const data = await res.json();
+      countryCode = (data.country || "XX").toUpperCase();
+    } catch (e) {
+      countryCode = "XX";
+    }
+  };
+  await getCountryCode(); // 先获取出口IP地区，用于后续兜底
+
+  // ===================== 🔥 核心：精准检测各平台实际解锁地区（集成你的逻辑）=====================
+  // 1. Netflix 三段式检测（优先取自身报头地区）
   const checkNetflix = async () => {
     try {
-      // 1.1 尝试访问非自制剧（全解锁检测）
+      // 全解锁检测：非自制剧
       const fullRes = await ctx.http.get("https://www.netflix.com/title/80018499", { 
         timeout: 3500, followRedirect: false 
       });
       if (fullRes.status === 200) {
-        const reg = fullRes.headers["x-netflix-originating-env"] || "US";
-        return { name: "奈飞", region: reg.toUpperCase() };
+        // 优先取Netflix自身报头，取不到则用出口IP地区
+        const reg = fullRes.headers["x-netflix-originating-env"] || countryCode; 
+        return { name: "奈飞", region: reg ? reg.toUpperCase() : "OK" };
       }
       
-      // 1.2 如果全解失败，尝试访问自制剧（半解锁检测）
+      // 半解锁检测：自制剧
       const basicRes = await ctx.http.get("https://www.netflix.com/title/81215567", { timeout: 3500 });
       if (basicRes.status === 200) {
         return { name: "奈飞", region: "🍿" }; // 半解锁标识
@@ -114,7 +128,7 @@ export default async function(ctx) {
     }
   };
 
-  // 2. 通用解锁检测函数（抽象复用）
+  // 2. 通用解锁检测（提取各平台自身的解锁地区）
   const checkUnlock = async (name, url, checkFn) => {
     try {
       const res = await ctx.http.get(url, { 
@@ -123,11 +137,11 @@ export default async function(ctx) {
         followRedirect: false
       });
       const checkResult = await checkFn(res);
-      // 如果检测通过，提取地区（优先loc字段）
       if (checkResult.ok) {
+        // 提取平台自身的loc地区（精准）
         const traceText = await res.text().catch(() => "");
         const locMatch = traceText.match(/loc=(\w+)/);
-        const region = locMatch ? locMatch[1].toUpperCase() : "US";
+        let region = locMatch ? locMatch[1].toUpperCase() : "OK";
         return { name, region };
       }
       return { name, region: "❌" };
@@ -136,13 +150,13 @@ export default async function(ctx) {
     }
   };
 
-  // 3. 所有解锁检测任务（可扩展）
+  // 3. 检测任务列表（精简命名）
   const unlockTasks = [
-    checkUnlock("ChatGPT", "https://chatgpt.com/auth/login", async (res) => ({ ok: res.status === 200 })),
-    checkNetflix(), // 独立Netflix三段式逻辑
-    checkUnlock("TikTok", "https://www.tiktok.com/", async (res) => ({ ok: res.status !== 403 })),
+    checkUnlock("GPT", "https://chatgpt.com/auth/login", async (res) => ({ ok: res.status === 200 })),
+    checkNetflix(), // 独立精准逻辑
+    checkUnlock("TkTk", "https://www.tiktok.com/", async (res) => ({ ok: res.status !== 403 })),
     checkUnlock("Gemini", "https://gemini.google.com/", async (res) => ({ ok: res.status === 200 && !res.url.includes("error") })),
-    checkUnlock("Disney+", "https://www.disneyplus.com", async (res) => ({ ok: res.status === 200 && !res.url.includes("preview") }))
+    checkUnlock("Disney", "https://www.disneyplus.com", async (res) => ({ ok: res.status === 200 && !res.url.includes("preview") }))
   ];
 
   // ===================== 科学计时：网络延迟检测 =====================
@@ -170,21 +184,17 @@ export default async function(ctx) {
     headers: { "User-Agent": "Mozilla/5.0" }, timeout: 5000
   }).catch(() => null);
 
-  const ipinfoPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 })
-    .catch(() => null);
-
-  // ===================== 全并行执行所有任务 =====================
-  // 并行执行：延迟检测 + IP信息 + 解锁检测
-  const [_, __, ipipResRaw, ipinfoResRaw, ...unlockResults] = await Promise.all([
+  // ===================== 并行执行所有任务 =====================
+  const [_, __, ipipResRaw, ...unlockResults] = await Promise.all([
     pingTask,
     ippureTask,
     ipipPromise,
-    ipinfoPromise,
     ...unlockTasks // 解锁检测任务
   ]);
 
   // ===================== 解析IP信息 =====================
   let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "";
+  let nIp = "—", nLoc = "—", asnInfo = "—";
   if (ipipResRaw) {
     try {
       const body = await ipipResRaw.json();
@@ -200,23 +210,16 @@ export default async function(ctx) {
         pubIsp = getISPByASN(pubASN) || getISPByIPIP(locArr[4] || locArr[3] || "", locArr) || DEFAULT_ISP;
         const flag = getFlagFromIPIP(locArr);
         pubLoc = `${flag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
+        
+        // 补充落地IP信息
+        nIp = pubIp;
+        nLoc = pubLoc;
+        asnInfo = pubASN;
       }
     } catch (e) {}
   }
 
-  let nIp = "—", nLoc = "—", asnInfo = "—";
-  if (ipinfoResRaw) {
-    try {
-      const dt = await ipinfoResRaw.json();
-      nIp = dt.ip || "—";
-      const code = dt.country || "";
-      const flag = code ? String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) : "🌐";
-      nLoc = `${flag} ${dt.region || ""} ${dt.city || ""}`.trim() || "—";
-      asnInfo = dt.org || "—";
-    } catch (e) {}
-  }
-
-  // ===================== 风险评分（优化版）=====================
+  // ===================== 风险评分 =====================
   const risk = ipData.fraudScore;
   let riskTxt = "检测失败", riskColor = C_SUB; 
   if (typeof risk === "number") {
@@ -236,7 +239,7 @@ export default async function(ctx) {
     : ipData.isResidential === false ? "🏢 机房" 
     : getIPType(pubIsp, asnInfo);
 
-  // ===================== 延迟颜色（适配暗色模式）=====================
+  // ===================== 延迟颜色 =====================
   let delayColor = C_SUB;
   if (realTcpDelay > 0) {
     if (realTcpDelay < 150) delayColor = C_GREEN;
@@ -248,9 +251,14 @@ export default async function(ctx) {
     else delayColor = C_RED;
   }
 
-  // ===================== 解锁状态格式化（按要求：平台 地区/❌）=====================
-  const unlockItems = unlockResults.map(item => `${item.name} ${item.region}`);
-  const unlockText = unlockItems.join("，");
+  // ===================== 🔥 你的核心逻辑：精准格式化解锁状态 =====================
+  const unlockText = unlockResults.map(r => {
+    // 如果是 ❌ 或 🍿，直接显示
+    if (r.region === "❌" || r.region === "🍿") return `${r.name} ${r.region}`;
+    // 如果探测成功但没有具体地区名，联动出口IP地区
+    const finalReg = (r.region && r.region !== "OK") ? r.region : (countryCode || "OK");
+    return `${r.name} ${finalReg}`;
+  }).join("，");
 
   // ===================== 延迟文本 =====================
   const delayText = realTcpDelay > 0 
@@ -269,7 +277,7 @@ export default async function(ctx) {
     ]
   });
 
-  // ===================== 最终返回（删除内网IP，新增解锁情况）=====================
+  // ===================== 最终返回（精简显示）=====================
   return {
     type: "widget",
     padding: [8, 10],
@@ -293,8 +301,8 @@ export default async function(ctx) {
       Row("mappin", C_SUB, "落地地区", nLoc, C_TEXT),
       Row("number.square.fill", C_SUB, "ASN", asnInfo, C_TEXT),
       Row("shield.fill", riskColor, "风险评分", riskTxt, riskColor),
-      // 新增：解锁情况行（集成你的三段式检测结果）
-      Row("play.rectangle", C_BLUE, "解锁情况", unlockText, C_TEXT)
+      // 精简：解锁情况 → 解锁
+      Row("play.rectangle", C_BLUE, "解锁", unlockText, C_TEXT)
     ]
   };
 }
