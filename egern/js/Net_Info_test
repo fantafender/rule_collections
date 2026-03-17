@@ -1,5 +1,6 @@
 /**
- * 📌 深度流媒体解锁看板 Pro (Disney+ 专项修复版)
+ * 📌 深度流媒体解锁看板 Pro (全地区ASN+完整功能恢复版)
+ * 优化：1.全球主流ASN覆盖 2.直连IP运营商恢复 3.落地IP样式恢复 4.RTT双模式延迟测算
  */
 export default async function(ctx) {
   const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
@@ -12,37 +13,89 @@ export default async function(ctx) {
 
   const BASE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
 
-  // ===================== 【运营商识别逻辑】 =====================
+  // ===================== 【1. 全球主流ASN全覆盖】 =====================
   function getISPByASN(asn) {
     const asnCode = (asn || '').trim().replace(/^AS/, '');
-    const map = { '9231': 'CMHK', '9381': 'CTHK', '4609': 'CTM', '2516': 'KDDI' };
-    return map[asnCode] || null;
+    // 覆盖全球主流地区运营商ASN
+    const globalASNMap = {
+      // 中国香港
+      '9231': 'CMHK',    // 香港移动
+      '9381': 'CTHK',    // 香港电信
+      '55412': 'HKBN',   // 香港宽频
+      // 中国澳门
+      '4609': 'CTM',     // 澳门电讯
+      // 日本
+      '2516': 'KDDI',    // 日本KDDI
+      '9605': 'SoftBank',// 日本软银
+      '1810': 'NTT',     // 日本NTT
+      // 美国
+      '7922': 'Comcast', // 美国康卡斯特
+      '20115': 'Charter',// 美国特许通讯
+      '3356': 'Level 3', // 美国Level 3
+      // 新加坡
+      '9603': 'Singtel', // 新加坡电信
+      '5511': 'StarHub', // 新加坡星和
+      // 德国
+      '3320': 'DTAG',    // 德国电信
+      '6724': 'Vodafone',// 德国沃达丰
+      // 英国
+      '5400': 'BT',      // 英国电信
+      '8075': 'Microsoft',// 微软Azure
+      // 韩国
+      '4766': 'KT',      // 韩国KT
+      '9318': 'SK Telecom'// 韩国SK电讯
+    };
+    return globalASNMap[asnCode] || null;
   }
 
+  // ===================== 【2. 恢复直连IP运营商识别逻辑】 =====================
   function getISPByIPIP(rawIsp, locArr) {
     const s = (rawIsp || '').toLowerCase();
     const area1 = (locArr[1] || '').toLowerCase();
-    if (area1.includes('香港')) return s.includes('mobile') ? 'CMHK' : '香港运营商';
+    
+    // 香港地区
+    if (area1.includes('香港')) {
+      if (s.includes('mobile') || s.includes('cmhk')) return 'CMHK';
+      if (s.includes('pccw') || s.includes('cthk')) return 'CTHK';
+      return '香港运营商';
+    }
+    // 澳门地区
     if (area1.includes('澳门')) return 'CTM';
+    // 中国大陆
     if (/(移动|cmcc)/i.test(s)) return '中国移动';
     if (/(电信|chinanet)/i.test(s)) return '中国电信';
     if (/(联通|unicom)/i.test(s)) return '中国联通';
-    return '未知运营商';
+    // 日本
+    if (area1.includes('日本') || area1.includes('japan')) {
+      if (s.includes('kddi')) return 'KDDI';
+      if (s.includes('softbank')) return 'SoftBank';
+      return '日本运营商';
+    }
+    // 美国
+    if (area1.includes('美国') || area1.includes('usa')) {
+      if (s.includes('comcast')) return 'Comcast';
+      return '美国运营商';
+    }
+    // 新加坡
+    if (area1.includes('新加坡') || area1.includes('singapore')) {
+      if (s.includes('singtel')) return 'Singtel';
+      return '新加坡运营商';
+    }
+    // 通用兜底
+    return s || '未知运营商';
   }
 
   const cityMap = { tokyo: '东京', osaka: '大阪', kyoto: '京都' };
 
-  // —————————————————— 🔥 深度解锁检测引擎 (精修版) ——————————————————
+  // —————————————————— 🔥 深度解锁检测引擎 (保留专项逻辑) ——————————————————
   const checkPlatform = async (name, url, isNetflix = false) => {
     try {
-      // 针对日本家宽的 Header 优化
       const commonHeaders = {
         "User-Agent": BASE_UA,
         "Accept-Language": "ja-JP,ja;q=0.9,en-US;q=0.8",
         "Referer": "https://www.google.co.jp/"
       };
 
-      // 1. Disney+ 专项逻辑 (VPS 级精准度)
       if (name === "Disney") {
         const dsRes = await ctx.http.get("https://www.disneyplus.com/welcome/", {
           timeout: 5000,
@@ -54,7 +107,6 @@ export default async function(ctx) {
         return { name, region: (dsRes.status === 200 && !isBlocked) ? countryCode : "❌" };
       }
 
-      // 2. Netflix 深度检测
       if (isNetflix) {
         const nfRes = await ctx.http.get(url, { timeout: 4000, headers: commonHeaders, followRedirect: false });
         if (nfRes.status === 200) {
@@ -65,7 +117,6 @@ export default async function(ctx) {
         return { name, region: nfRes2.status === 200 ? "🍿" : "❌" };
       }
 
-      // 3. AI 类逻辑 (GPT/Gemini)
       const isAI = name === "GPT" || name === "Gemini";
       const res = await ctx.http.get(url, {
         timeout: 4500,
@@ -77,7 +128,6 @@ export default async function(ctx) {
       const isError = finalUrl.includes("error") || finalUrl.includes("unsupported");
       
       if (name === "GPT") {
-        // GPT 允许 200 或跳转到登录页，只要不是被 CF 拦截 (403)
         return { name, region: (res.status === 200 || res.status === 302) ? countryCode : "❌" };
       }
 
@@ -87,33 +137,70 @@ export default async function(ctx) {
     }
   };
 
-  // —————————————————— 数据抓取与并行执行 ——————————————————
-  let pubIp = "—", pubLoc = "—", pubIsp = "未知", pubASN = "", nIp = "—", nLoc = "—", countryCode = "XX", asnInfo = "—";
+  // —————————————————— 【3. 落地IP 位置/国旗 恢复成功版本】 ——————————————————
+  let pubIp = "—", pubLoc = "—", pubIsp = "未知运营商", pubASN = "", 
+      nIp = "—", nLoc = "—", countryCode = "XX", asnInfo = "—";
+
+  // ===================== 【4. RTT网络+接口延迟双模式测算】 =====================
+  // RTT网络延迟测算
+  const measureRTT = async (url) => {
+    try {
+      const start = Date.now();
+      await ctx.http.get(url, { timeout: 3000 });
+      return Date.now() - start;
+    } catch (e) {
+      return -1; // 失败返回-1
+    }
+  };
 
   const fetchBaseInfo = async () => {
     try {
-      const [ipipRes, ipinfoRes] = await Promise.all([
+      const [ipipRes, ipinfoRes, rtt1, rtt2] = await Promise.all([
         ctx.http.get('https://myip.ipip.net/json', { timeout: 4000 }).catch(() => null),
-        ctx.http.get('https://ipinfo.io/json', { timeout: 4000 }).catch(() => null)
+        ctx.http.get('https://ipinfo.io/json', { timeout: 4000 }).catch(() => null),
+        measureRTT('https://www.baidu.com'), // 国内RTT参考
+        measureRTT('https://www.google.com') // 海外RTT参考
       ]);
+
+      // 直连IP完整逻辑恢复
       if (ipipRes) {
         const body = await ipipRes.json();
         pubIp = body.data?.ip || "—";
         const locArr = body.data?.location || [];
-        pubLoc = `🇨🇳 ${locArr[1] || ""} ${locArr[2] || ""}`.trim();
-        pubIsp = getISPByASN(pubASN) || getISPByIPIP(locArr[4] || locArr[3], locArr);
+        pubLoc = `🇨🇳 ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
+        
+        // 恢复ASN获取逻辑
+        try {
+          const asnRes = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { timeout: 2000 });
+          pubASN = (await asnRes.text()).trim() || "";
+        } catch(e) {}
+        
+        // 恢复双优先级运营商识别
+        pubIsp = getISPByASN(pubASN) || getISPByIPIP(locArr[4] || locArr[3], locArr) || "未知运营商";
       }
+
+      // 落地IP 国旗/位置 恢复成功版本
       if (ipinfoRes) {
         const dt = await ipinfoRes.json();
-        nIp = dt.ip; countryCode = (dt.country || "XX").toUpperCase();
-        const flag = dt.country ? String.fromCodePoint(...dt.country.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) : "🌐";
-        nLoc = `${flag} ${dt.region || ""} ${cityMap[dt.city?.toLowerCase()] || dt.city || ""}`;
+        nIp = dt.ip || "—"; 
+        countryCode = (dt.country || "XX").toUpperCase();
+        
+        // 国旗Emoji恢复（兼容所有国家）
+        const flag = dt.country 
+          ? String.fromCodePoint(...dt.country.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) 
+          : "🌐";
+        
+        // 位置格式恢复（去空字符+标准化）
+        const region = dt.region || "";
+        const city = cityMap[dt.city?.toLowerCase()] || dt.city || "";
+        nLoc = `${flag} ${region} ${city}`.replace(/\s+/g, ' ').trim() || `${flag} 未知位置`;
         asnInfo = dt.org || "—";
       }
     } catch(e) {}
   };
 
-  const start = Date.now();
+  // 主延迟测算（接口总耗时+RTT）
+  const startTotal = Date.now();
   const [_, ipRes, results] = await Promise.all([
     fetchBaseInfo(),
     ctx.http.get('https://my.ippure.com/v1/info', { timeout: 4000 }).catch(() => null),
@@ -125,6 +212,16 @@ export default async function(ctx) {
       checkPlatform("Disney", "https://www.disneyplus.com")
     ])
   ]);
+  const totalCost = Date.now() - startTotal;
+
+  // 格式化延迟显示（双模式）
+  const formatDelay = (cost) => {
+    if (cost < 0) return "超时";
+    if (cost < 100) return `${cost}ms 🟢`;
+    if (cost < 300) return `${cost}ms 🟡`;
+    return `${cost}ms 🔴`;
+  };
+  const delayText = `${formatDelay(totalCost)} (RTT: ${formatDelay(await measureRTT('https://ipinfo.io'))})`;
 
   const unlockText = results.map(r => `${r.name} ${r.region}`).join("，");
   let ipData = {}; try { if (ipRes) ipData = await ipRes.json(); } catch(e) {}
@@ -148,25 +245,22 @@ export default async function(ctx) {
   });
 
   const d = ctx.device || {};
-  const netName = d.wifi?.ssid ? d.wifi.ssid : "蜂窝网络";
+  const isWifi = !!d.wifi?.ssid;
+  const netName = isWifi ? (d.wifi.ssid || "Wi-Fi") : "蜂窝网络";
+  const netIcon = isWifi ? "wifi" : "antenna.radiowaves.left.and.right";
 
   return {
     type: 'widget', padding: [8, 10], backgroundColor: BG_CARD, cornerRadius: 12,
     children: [
       { type: 'stack', direction: 'row', alignItems: 'center', padding: [2,0,4,0], children: [
-          { type: 'image', src: `sf-symbol:network`, color: C_BLUE, width:14, height:14 },
+          { type: 'image', src: `sf-symbol:${netIcon}`, color: C_BLUE, width:14, height:14 },
           { type: 'spacer', length:5 },
           { type: 'text', text: netName, font: { size:13, weight:'semibold' }, textColor: C_TEXT },
           { type: 'spacer' },
-          { type: 'text', text: `${Date.now() - start}ms`, font: { size:11 }, textColor: C_GREEN }
+          // 双模式延迟显示
+          { type: 'text', text: delayText, font: { size:11 }, textColor: C_GREEN }
       ]},
       Row("globe", C_BLUE, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT),
       Row("mappin", C_SUB, "位置", pubLoc, C_TEXT),
-      Row("paperplane.fill", C_BLUE, "落地IP", `${nIp} ${ipData.isResidential ? "🏠" : "🏢"}`, C_TEXT),
-      Row("mappin", C_SUB, "落地", nLoc, C_TEXT),
-      Row("number.square.fill", C_SUB, "ASN", asnInfo, C_TEXT),
-      Row(riskIcon, riskCol, "风险", riskTxt, riskCol),
-      Row("play.tv.fill", C_BLUE, "解锁", unlockText, C_TEXT),
-    ]
-  };
-}
+      Row("paperplane.fill", C_BLUE, "落地IP", `${nIp} ${ipData.isResidential ? "🏠" : ipData.isResidential === false ? "🏢" : "—"}`, C_TEXT),
+      Row("m
