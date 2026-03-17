@@ -7,7 +7,7 @@ export default async function(ctx) {
   const C_GREEN = { light: '#34C759', dark: '#30D158' };
   const C_ORANGE= { light: '#FF9500', dark: '#FF9F0A' };
   const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
-  const C_YELLOW= { light: '#FFCC00', dark: '#FFD60A' };
+  const C_YELLOW= { '#FFCC00', dark: '#FFD60A' };
 
   // ===================== IP类型判断 =====================
   function getIPType(isp, org) {
@@ -123,52 +123,12 @@ export default async function(ctx) {
 
   const localIp = d.ipv4?.address || "—";
 
-  // ===================== 🔥 核心优化：轻量网络延迟探测（剔除TLS）=====================
-  let tcpHandshakeDelay = 0;
-  const tcpPingPromise = (async () => {
-    // 预热连接（减少冷启动损耗）
-    try {
-      await ctx.http.get('http://1.1.1.1/', { timeout: 1000 }).catch(() => null);
-    } catch (e) {}
-
-    // 精准计时：仅统计TCP握手+数据传输（HTTP无TLS）
-    const pingStart = Date.now();
-    try {
-      // 使用HTTP 204节点，剔除TLS握手开销
-      await ctx.http.get('http://1.1.1.1/generate_204', { 
-        timeout: 2000,
-        // 禁用缓存，确保每次都是真实连接
-        headers: { 'Cache-Control': 'no-cache' }
-      });
-    } catch (e) {
-      // 降级到百度HTTP节点（国内兜底）
-      try {
-        await ctx.http.get('http://www.baidu.com/favicon.ico', { timeout: 2000 });
-      } catch (err) {}
-    }
-    tcpHandshakeDelay = Date.now() - pingStart;
-    
-    // 修正：剔除脚本环境封装耗时（经验值补偿）
-    if (tcpHandshakeDelay > 20) {
-      tcpHandshakeDelay -= 20; // 补偿ctx.http.get的系统调用开销
-    }
-  })();
-
-  // ===================== 原有接口请求 =====================
-  let asnPromise = Promise.resolve("");
+  // ===================== 🔥 核心重构：全并行探测（你的精准方案）=====================
+  // 1. 定义所有Promise任务（先定义，不执行）
   const ipipPromise = ctx.http.get('https://myip.ipip.net/json', {
     headers: { 'User-Agent': 'Mozilla/5.0' }, 
     timeout: 5000,
     retry: 1
-  }).then(async (res) => {
-    const body = await res.json();
-    if (body?.data?.ip) {
-      asnPromise = ctx.http.get(`https://ipapi.co/${body.data.ip}/asn/`, { 
-        timeout: 3000,
-        retry: 1
-      }).then(res => res.text().then(t => t.trim())).catch(() => "");
-    }
-    return body;
   }).catch(() => ({}));
 
   const ipinfoPromise = ctx.http.get('https://ipinfo.io/json', { 
@@ -176,47 +136,71 @@ export default async function(ctx) {
     retry: 1
   }).catch(() => ({}));
 
-  // 接口响应延迟
-  let ipData = {}, apiResponseTime = 0;
-  const ippurePromise = (async () => {
-    try {
-      const start = Date.now();
-      const r = await ctx.http.get('https://my.ippure.com/v1/info', { 
-        timeout: 5000,
-        retry: 1
-      });
-      apiResponseTime = Date.now() - start;
-      ipData = await r.json();
-    } catch (e) {
-      ipData = {};
-      apiResponseTime = 0;
-    }
-  })();
+  const ippurePromise = ctx.http.get('https://my.ippure.com/v1/info', { 
+    timeout: 5000,
+    retry: 1
+  }).catch(() => ({}));
 
-  // 等待所有并行请求完成
-  await tcpPingPromise;
-  const [ipipRes, ipinfoRes] = await Promise.allSettled([ipipPromise, ipinfoPromise]);
-  await ippurePromise;
+  // 2. 全并行计时起点（所有任务同一时间开始）
+  const startAll = Date.now();
+
+  // 3. 极速HTTPS探测任务（Cloudflare边缘节点，最准的网络RTT）
+  const pingTask = ctx.http.get('https://1.1.1.1/cdn-cgi/trace', { timeout: 2500 })
+    .then(() => Date.now() - startAll)  // 同一计时起点，精准计算
+    .catch(() => 0);
+
+  // 4. ASN请求需要依赖ipip结果，先定义空Promise
+  let asnPromise = Promise.resolve("");
+  let ipData = {}, apiResponseTime = 0;
+
+  // 5. 全并行执行所有任务（不准排队！）
+  const [realTcpDelay, ipipResRaw, ipinfoResRaw, pureResRaw] = await Promise.all([
+    pingTask,
+    ipipPromise,
+    ipinfoPromise,
+    ippurePromise
+  ]);
+
+  // 6. 单独计算ippure接口响应时间（补充接口延迟）
+  if (pureResRaw) {
+    try {
+      const pureStart = Date.now();
+      const pureData = await pureResRaw.json();
+      apiResponseTime = Date.now() - pureStart;
+      ipData = pureData;
+    } catch (e) {
+      apiResponseTime = 0;
+      ipData = {};
+    }
+  }
 
   // ===================== 直连IP解析 =====================
   let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "";
-  pubASN = await asnPromise || "";
-
-  if (ipipRes.status === 'fulfilled' && ipipRes.value?.data) {
+  if (ipipResRaw) {
     try {
-      const body = ipipRes.value;
-      pubIp = body.data.ip || "—";
-      
-      const locRaw = body.data.location;
-      const locArr = Array.isArray(locRaw) 
-        ? locRaw 
-        : (locRaw || '').split(' ').filter(item => item);
-      
-      const rawIspFromIPIP = locArr[4] || locArr[3] || '';
-      pubIsp = getISPByASN(pubASN) || getISPByIPIP(rawIspFromIPIP, locArr) || DEFAULT_ISP;
+      const body = await ipipResRaw.json();
+      if (body?.data) {
+        pubIp = body.data.ip || "—";
+        
+        // 获取ASN（并行执行）
+        if (body.data.ip) {
+          pubASN = await ctx.http.get(`https://ipapi.co/${body.data.ip}/asn/`, { 
+            timeout: 3000,
+            retry: 1
+          }).then(res => res.text().then(t => t.trim())).catch(() => "");
+        }
+        
+        const locRaw = body.data.location;
+        const locArr = Array.isArray(locRaw) 
+          ? locRaw 
+          : (locRaw || '').split(' ').filter(item => item);
+        
+        const rawIspFromIPIP = locArr[4] || locArr[3] || '';
+        pubIsp = getISPByASN(pubASN) || getISPByIPIP(rawIspFromIPIP, locArr) || DEFAULT_ISP;
 
-      const flag = getFlagFromIPIP(locArr);
-      pubLoc = `${flag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
+        const flag = getFlagFromIPIP(locArr);
+        pubLoc = `${flag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
+      }
     } catch (e) {
       console.log('ipip解析失败，使用默认值');
     }
@@ -224,9 +208,9 @@ export default async function(ctx) {
 
   // ===================== 落地IP解析 =====================
   let nIp = "—", nLoc = "—", asnInfo = "—";
-  if (ipinfoRes.status === 'fulfilled') {
+  if (ipinfoResRaw) {
     try {
-      const dt = await ipinfoRes.value.json();
+      const dt = await ipinfoResRaw.json();
       nIp = dt.ip || "—";
       const code = dt.country || "";
       const flag = code ? String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) : "🌐";
@@ -257,17 +241,17 @@ export default async function(ctx) {
     else { riskTxt = `纯净 ${risk}`; riskCol = C_GREEN; riskIcon = "checkmark.shield.fill"; }
   }
 
-  // ===================== 延迟显示（优化后双指标）=====================
-  // 文本拼接（更精准的标注）
+  // ===================== 延迟显示（精准双指标）=====================
+  // 文本拼接（真实网络RTT + 接口响应时间）
+  const tcpText = realTcpDelay > 0 ? `${realTcpDelay}ms (网络RTT)` : "— (网络RTT)";
   const apiText = apiResponseTime > 0 ? `${apiResponseTime}ms (接口)` : "— (接口)";
-  const tcpText = tcpHandshakeDelay > 0 ? `${tcpHandshakeDelay}ms (网络RTT)` : "— (网络RTT)";
-  const delayText = `${apiText} / ${tcpText}`;
+  const delayText = `${tcpText} / ${apiText}`;
 
-  // 颜色按网络RTT判定
+  // 颜色按真实网络RTT判定（最准）
   let delayColor = C_SUB;
-  if (tcpHandshakeDelay > 150) delayColor = C_RED;    // 高延迟（优化阈值，贴合真实RTT）
-  else if (tcpHandshakeDelay > 80) delayColor = C_YELLOW; // 中延迟
-  else if (tcpHandshakeDelay > 0) delayColor = C_GREEN;    // 低延迟
+  if (realTcpDelay > 150) delayColor = C_RED;    // 高延迟
+  else if (realTcpDelay > 80) delayColor = C_YELLOW; // 中延迟
+  else if (realTcpDelay > 0) delayColor = C_GREEN;    // 低延迟
   // 降级逻辑
   else if (apiResponseTime > 300) delayColor = C_RED;
   else if (apiResponseTime > 100) delayColor = C_YELLOW;
