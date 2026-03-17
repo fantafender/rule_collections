@@ -1,5 +1,5 @@
 export default async function(ctx) {
-  // ===================== 样式常量 =====================
+  // ===================== 样式常量（light/dark 双模式）=====================
   const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
   const C_TEXT  = { light: '#000000', dark: '#FFFFFF' };
   const C_SUB   = { light: '#6E6E73', dark: '#8E8E93' };
@@ -7,6 +7,14 @@ export default async function(ctx) {
   const C_GREEN = { light: '#34C759', dark: '#30D158' };
   const C_YELLOW= { light: '#FF9F0A', dark: '#FF9F0A' };
   const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
+
+  // ===================== 辅助函数：获取系统主题适配的颜色 =====================
+  // 自动根据系统模式返回对应颜色值
+  const getThemeColor = (colorObj) => {
+    // 检测系统暗色模式（Egern 环境通用检测方式）
+    const isDarkMode = ctx?.device?.colorScheme === 'dark' || false;
+    return isDarkMode ? colorObj.dark : colorObj.light;
+  };
 
   // ===================== IP类型判断 =====================
   function getIPType(isp, org) {
@@ -85,7 +93,7 @@ export default async function(ctx) {
   }
   const localIp = d.ipv4?.address || "—";
 
-  // ===================== 🔥 真正科学：独立内部计时 =====================
+  // ===================== 🔥 科学计时：独立内部计时 =====================
   const globalStart = Date.now();
 
   // 1. 网络 RTT（HTTPS 真实延迟）
@@ -154,19 +162,22 @@ export default async function(ctx) {
     } catch (e) {}
   }
 
-  // ===================== 风险评分颜色（随分数变化）=====================
+  // ===================== 风险评分（优化版：视觉+健壮性+暗色适配） =====================
   const risk = ipData.fraudScore;
-  let riskTxt = "—", riskColor = C_SUB.light;
+  // 1. 兜底显示优化：默认检测失败，避免显示—
+  let riskTxt = "检测失败", riskColor = C_SUB; 
+  
+  // 2. 逻辑保留，文案优化更符合行业表述
   if (typeof risk === "number") {
     if (risk < 30) {
-      riskTxt = `纯净 ${risk}`;
-      riskColor = C_GREEN.light;
+      riskTxt = `极高纯净 (${risk})`;    // 更专业的表述
+      riskColor = C_GREEN;
     } else if (risk < 60) {
-      riskTxt = `一般 ${risk}`;
-      riskColor = C_YELLOW.light;
+      riskTxt = `中等风险 (${risk})`;    // 更精准的分级
+      riskColor = C_YELLOW;
     } else {
-      riskTxt = `高风险 ${risk}`;
-      riskColor = C_RED.light;
+      riskTxt = `高风险警告 (${risk})`;  // 醒目提示
+      riskColor = C_RED;
     }
   }
 
@@ -174,58 +185,63 @@ export default async function(ctx) {
     : ipData.isResidential === false ? "🏢 机房" 
     : getIPType(pubIsp, asnInfo);
 
-  // ===================== 延迟颜色（你指定的标准）=====================
+  // ===================== 延迟颜色（适配暗色模式）=====================
   // 🟢 <150 优秀 | 🟡 150-350 良好 | 🔴 >350 差
-  let delayColor = C_SUB.light;
+  let delayColor = C_SUB;
   if (realTcpDelay > 0) {
-    if (realTcpDelay < 150) delayColor = C_GREEN.light;
-    else if (realTcpDelay <= 350) delayColor = C_YELLOW.light;
-    else delayColor = C_RED.light;
+    if (realTcpDelay < 150) delayColor = C_GREEN;
+    else if (realTcpDelay <= 350) delayColor = C_YELLOW;
+    else delayColor = C_RED;
   } else if (apiResponseTime > 0) {
-    if (apiResponseTime < 150) delayColor = C_GREEN.light;
-    else if (apiResponseTime <= 350) delayColor = C_YELLOW.light;
-    else delayColor = C_RED.light;
+    if (apiResponseTime < 150) delayColor = C_GREEN;
+    else if (apiResponseTime <= 350) delayColor = C_YELLOW;
+    else delayColor = C_RED;
   }
 
-const delayText = realTcpDelay > 0 
-  ? `${realTcpDelay}ms (网络RTT) / ${apiResponseTime || "—"}ms (接口)`
-  : `${apiResponseTime || "—"}ms (接口)`;
+  // ===================== 延迟文本（保留网络RTT/接口字段）=====================
+  const delayText = realTcpDelay > 0 
+    ? `${realTcpDelay}ms (网络RTT) / ${apiResponseTime || "—"}ms (接口)`
+    : `${apiResponseTime || "—"}ms (接口)`;
 
-  // ===================== UI =====================
+  // ===================== UI 组件（优化视觉一致性）=====================
+  // 优化点：标签用灰色（C_SUB），仅数值/图标用主题色，避免杂乱
   const Row = (ic, icCol, label, val, valCol) => ({
     type: "stack", direction: "row", alignItems: "center", padding: [3, 0],
     children: [
-      { type: "image", src: `sf-symbol:${ic}`, color: icCol, width: 12, height: 12 },
+      { type: "image", src: `sf-symbol:${ic}`, color: getThemeColor(icCol), width: 12, height: 12 },
       { type: "spacer", length: 5 },
-      { type: "text", text: label, font: { size: 10 }, textColor: C_SUB.light },
+      { type: "text", text: label, font: { size: 10 }, textColor: getThemeColor(C_SUB) },
       { type: "spacer" },
-      { type: "text", text: val, font: { size: 10, weight: "medium" }, textColor: valCol, maxLines: 1 }
+      { type: "text", text: val, font: { size: 10, weight: "medium" }, textColor: getThemeColor(valCol), maxLines: 1 }
     ]
   });
 
+  // ===================== 最终返回（适配暗色模式）=====================
   return {
     type: "widget",
     padding: [8, 10],
-    backgroundColor: BG_CARD.light,
+    backgroundColor: getThemeColor(BG_CARD), // 背景自适应
     cornerRadius: 12,
     refreshPolicy: { onNetworkChange: true, onEnter: true, timeout: 10 },
     children: [
       {
         type: "stack", direction: "row", alignItems: "center", padding: [2, 0, 4, 0],
         children: [
-          { type: "image", src: `sf-symbol:${netIcon}`, color: C_BLUE.light, width:14, height:14 },
+          { type: "image", src: `sf-symbol:${netIcon}`, color: getThemeColor(C_BLUE), width:14, height:14 },
           { type: "spacer", length:5 },
-          { type: "text", text: netName, font: { size:13, weight:"semibold" }, textColor: C_TEXT.light },
+          { type: "text", text: netName, font: { size:13, weight:"semibold" }, textColor: getThemeColor(C_TEXT) },
           { type: "spacer" },
-          { type: "text", text: delayText, font: { size:10, weight:"medium" }, textColor: delayColor }
+          { type: "text", text: delayText, font: { size:10, weight:"medium" }, textColor: getThemeColor(delayColor) }
         ]
       },
-      Row("iphone", C_GREEN.light, "内网IP", localIp, C_TEXT.light),
-      Row("globe", C_BLUE.light, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT.light),
-      Row("mappin", C_SUB.light, "位置", pubLoc, C_TEXT.light),
-      Row("paperplane.fill", C_BLUE.light, "落地IP", `${nIp} ${ipType}`, C_TEXT.light),
-      Row("mappin", C_SUB.light, "落地地区", nLoc, C_TEXT.light),
-      Row("number.square.fill", C_SUB.light, "ASN", asnInfo, C_TEXT.light),
+      // 优化视觉：仅图标用主题色，文字用默认色，避免全彩杂乱
+      Row("iphone", C_GREEN, "内网IP", localIp, C_TEXT),
+      Row("globe", C_BLUE, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT),
+      Row("mappin", C_SUB, "位置", pubLoc, C_TEXT),
+      Row("paperplane.fill", C_BLUE, "落地IP", `${nIp} ${ipType}`, C_TEXT),
+      Row("mappin", C_SUB, "落地地区", nLoc, C_TEXT),
+      Row("number.square.fill", C_SUB, "ASN", asnInfo, C_TEXT),
+      // 风险评分：仅数值/图标变色，标签保持灰色，视觉更整洁
       Row("shield.fill", riskColor, "风险评分", riskTxt, riskColor),
     ]
   };
