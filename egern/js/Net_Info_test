@@ -144,20 +144,25 @@ export default async function(ctx) {
     })
     .catch(() => { apiResponseTime = 0; });
 
-  // 3. 其他信息
-  const ipipPromise = ctx.http.get("https://myip.ipip.net/json", {
-    headers: { "User-Agent": "Mozilla/5.0" }, timeout: 5000
+  // ===================== 🌐 IP获取（修复：直连 vs 代理分离） =====================
+  // 直连 IP（本机公网）
+  const ipipDirect = ctx.http.get("https://myip.ipip.net/json", {
+    headers: { "User-Agent": "Mozilla/5.0" },
+    policy: "DIRECT",
+    timeout: 5000
   }).catch(() => null);
 
-  const ipinfoPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 })
-    .catch(() => null);
+  // 代理出口 IP（落地IP）
+  const ipinfoProxy = ctx.http.get("https://ipinfo.io/json", {
+    timeout: 5000
+  }).catch(() => null);
 
   // 并行执行
   const [_, __, ipipResRaw, ipinfoResRaw] = await Promise.all([
     pingTask,
     ippureTask,
-    ipipPromise,
-    ipinfoPromise
+    ipipDirect,   // ✅ 直连
+    ipinfoProxy   // ✅ 代理
   ]);
 
   // ===================== 解析 IP（核心改造：接入fmtISP）=====================
@@ -175,13 +180,20 @@ export default async function(ctx) {
           ? body.data.location 
           : (body.data.location || "").split(" ").filter(Boolean);
         
-        // 核心改造：先获取原始运营商，再通过fmtISP格式化
-        const rawIsp = getISPByASN(pubASN) || getISPByIPIP(locArr[4] || locArr[3] || "", locArr) || DEFAULT_ISP;
-        // 用fmtISP格式化：境内匹配正则，海外返回原始值
-        pubIsp = fmtISP(rawIsp);
+        // 更稳的 ISP 识别
+        const rawIsp = locArr.slice(-1)[0] || "";
+        // 先获取原始运营商，再通过fmtISP格式化
+        const originIsp = getISPByASN(pubASN) || getISPByIPIP(rawIsp, locArr) || DEFAULT_ISP;
+        pubIsp = fmtISP(originIsp);
 
         const flag = getFlagFromIPIP(locArr);
-        pubLoc = `${flag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
+
+        // 更稳的位置（防止字段错位）
+        const country = locArr[0] || "";
+        const region  = locArr[1] || "";
+        const city    = locArr[2] || "";
+
+        pubLoc = `${flag} ${region} ${city}`.trim() || "—";
       }
     } catch (e) {}
   }
