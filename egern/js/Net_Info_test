@@ -9,7 +9,9 @@ export default async function(ctx) {
   const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
 
   // ===================== 辅助函数：获取系统主题适配的颜色 =====================
+  // 自动根据系统模式返回对应颜色值
   const getThemeColor = (colorObj) => {
+    // 检测系统暗色模式（Egern 环境通用检测方式）
     const isDarkMode = ctx?.device?.colorScheme === 'dark' || false;
     return isDarkMode ? colorObj.dark : colorObj.light;
   };
@@ -77,64 +79,6 @@ export default async function(ctx) {
     return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt()));
   }
 
-  // ===================== 🔥 解锁检测核心逻辑 =====================
-  const BASE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
-  let countryCode = "XX"; // 落地IP国家码，用于解锁检测
-
-  // 统一解锁检测函数
-  const checkPlatform = async (name, url, isNetflix = false) => {
-    try {
-      const isAI = name === "GPT" || name === "Gemini";
-      const res = await ctx.http.get(url, {
-        timeout: 4500,
-        headers: { 
-          "User-Agent": BASE_UA, 
-          "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
-          "Referer": "https://www.google.com/" 
-        },
-        followRedirect: isAI ? true : false
-      });
-
-      // 1. Netflix 深度检测 (基于 Header)
-      if (isNetflix) {
-        if (res.status === 200) {
-          const reg = res.headers["x-netflix-originating-env"] || res.headers["X-Netflix-Originating-Env"];
-          return { name, region: reg ? reg.toUpperCase() : countryCode };
-        }
-        const res2 = await ctx.http.get("https://www.netflix.com/title/81215567", { timeout: 3000 });
-        return { name, region: res2.status === 200 ? "🍿" : "❌" };
-      }
-
-      // 2. Disney+ 专项逻辑 (welcome页面 + 关键词过滤)
-      if (name === "Disney") {
-        const dsRes = await ctx.http.get("https://www.disneyplus.com/welcome/", {
-          timeout: 5000,
-          headers: { "User-Agent": BASE_UA, "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8" },
-          followRedirect: true
-        });
-        const dsUrl = dsRes.url || "";
-        const isBlocked = dsUrl.includes("unsupported") || dsUrl.includes("preview") || dsUrl.includes("coming-soon");
-        return { name, region: isBlocked ? "❌" : countryCode };
-      }
-
-      // 3. AI/其他平台关键词过滤逻辑
-      const finalUrl = res.url || "";
-      const isBlocked = finalUrl.includes("unsupported") || finalUrl.includes("error") || finalUrl.includes("preview");
-      
-      // GPT 特殊判定：302 到登录页也算 OK
-      if (name === "GPT") {
-        if (res.status === 200 || res.status === 302) return { name, region: countryCode };
-      }
-
-      if (res.status === 200 && !isBlocked) {
-        return { name, region: countryCode };
-      }
-      return { name, region: "❌" };
-    } catch (e) {
-      return { name, region: "❌" };
-    }
-  };
-
   // ===================== 基础网络信息 =====================
   const d = ctx.device || {};
   const isWifi = !!d.wifi?.ssid;
@@ -142,11 +86,20 @@ export default async function(ctx) {
   if (isWifi) {
     netName = d.wifi.ssid || "Wi‑Fi";
     netIcon = "wifi";
-  } else if (d.cellular?.radio) {
-    const r = d.cellular.radio.toUpperCase().replace(/\s+/g, "");
-    const map = { "GPRS": "2G", "EDGE": "2G", "WCDMA": "3G", "LTE": "4G", "NR": "5G", "NRNSA": "5G" };
-    netName = `蜂窝: ${map[r] || r || "5G"}`;
-  }
+} else if (d.cellular?.radio) {
+  const r = d.cellular.radio.toUpperCase().trim();
+  let netType = "5G";
+  // 这里可以自定义显示文字
+  if (r.includes("NRNSA") || r === "NRNSA") netType = "5G NSA";
+  else if (r.includes("NR") || r === "NR") netType = "5G SA";
+  else if (r === "LTE") netType = "4G LTE";
+  else if (r === "WCDMA") netType = "3G";
+  else if (r === "GPRS" || r === "EDGE") netType = "2G";
+  else netType = r;
+
+  netName = `蜂窝: ${netType}`;
+}
+  const localIp = d.ipv4?.address || "—";
 
   // ===================== 🔥 科学计时：独立内部计时 =====================
   const globalStart = Date.now();
@@ -168,49 +121,67 @@ export default async function(ctx) {
     })
     .catch(() => { apiResponseTime = 0; });
 
-  // 3. 其他信息
+  // 3. 修复：区分直连IP和落地IP的数据源
+  // 直连IP（本地出口IP）：使用api.ipify.org（优先无代理）
+  const directIpPromise = ctx.http.get("https://api.ipify.org?format=json", { 
+    timeout: 5000,
+    headers: { "User-Agent": "Mozilla/5.0" }
+  }).catch(() => null);
+  
+  // 落地IP：保留原ipinfo.io（可能走代理）
+  const landingIpPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 })
+    .catch(() => null);
+
+  // 保留原ipip.net用于直连IP的运营商/位置补充
   const ipipPromise = ctx.http.get("https://myip.ipip.net/json", {
     headers: { "User-Agent": "Mozilla/5.0" }, timeout: 5000
   }).catch(() => null);
 
-  const ipinfoPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 })
-    .catch(() => null);
-
-  // 并行执行
-  const [_, __, ipipResRaw, ipinfoResRaw] = await Promise.all([
+  // 并行执行（调整顺序，新增直连IP请求）
+  const [_, __, directIpRes, landingIpRes, ipipResRaw] = await Promise.all([
     pingTask,
     ippureTask,
-    ipipPromise,
-    ipinfoPromise
+    directIpPromise,  // 新增：直连IP响应
+    landingIpPromise, // 原ipinfoPromise改为落地IP
+    ipipPromise       // 保留原ipip请求
   ]);
 
-  // ===================== 解析 IP =====================
+  // ===================== 解析 IP（修复核心：分开解析直连/落地IP）=====================
+  // 解析直连IP（本地出口IP）
   let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "";
-  if (ipipResRaw) {
+  if (directIpRes) {
     try {
-      const body = await ipipResRaw.json();
-      if (body?.data) {
-        pubIp = body.data.ip || "—";
-        if (pubIp) {
-          pubASN = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { timeout: 3000 })
-            .then(r => r.text().then(t => t.trim())).catch(() => "");
-        }
-        const locArr = Array.isArray(body.data.location) 
-          ? body.data.location 
-          : (body.data.location || "").split(" ").filter(Boolean);
-        pubIsp = getISPByASN(pubASN) || getISPByIPIP(locArr[4] || locArr[3] || "", locArr) || DEFAULT_ISP;
-        const flag = getFlagFromIPIP(locArr);
-        pubLoc = `${flag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
+      const directData = await directIpRes.json();
+      pubIp = directData.ip || "—";
+      
+      // 用原ipip逻辑补充直连IP的运营商/位置
+      if (pubIp !== "—" && ipipResRaw) {
+        try {
+          const body = await ipipResRaw.json();
+          if (body?.data) {
+            // 仅当ipip返回的IP和直连IP一致时，才用其运营商/位置
+            if (body.data.ip === pubIp) {
+              pubASN = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { timeout: 3000 })
+                .then(r => r.text().then(t => t.trim())).catch(() => "");
+              const locArr = Array.isArray(body.data.location) 
+                ? body.data.location 
+                : (body.data.location || "").split(" ").filter(Boolean);
+              pubIsp = getISPByASN(pubASN) || getISPByIPIP(locArr[4] || locArr[3] || "", locArr) || DEFAULT_ISP;
+              const flag = getFlagFromIPIP(locArr);
+              pubLoc = `${flag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
+            }
+          }
+        } catch (e) {}
       }
     } catch (e) {}
   }
 
+  // 解析落地IP（保留原逻辑，变量名改为nIp/nLoc/asnInfo）
   let nIp = "—", nLoc = "—", asnInfo = "—";
-  if (ipinfoResRaw) {
+  if (landingIpRes) {
     try {
-      const dt = await ipinfoResRaw.json();
+      const dt = await landingIpRes.json();
       nIp = dt.ip || "—";
-      countryCode = (dt.country || "XX").toUpperCase(); // 赋值给解锁检测用的国家码
       const code = dt.country || "";
       const flag = code ? String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) : "🌐";
       nLoc = `${flag} ${dt.region || ""} ${dt.city || ""}`.trim() || "—";
@@ -218,17 +189,7 @@ export default async function(ctx) {
     } catch (e) {}
   }
 
-  // ===================== 执行解锁检测 =====================
-  const unlockResults = await Promise.all([
-    checkPlatform("GPT", "https://chatgpt.com/auth/login"),
-    checkPlatform("奈飞", "https://www.netflix.com/title/80018499", true),
-    checkPlatform("TikTok", "https://www.tiktok.com/"),
-    checkPlatform("Gemini", "https://gemini.google.com/app"),
-    checkPlatform("Disney", "https://www.disneyplus.com")
-  ]);
-  const unlockText = unlockResults.map(r => `${r.name} ${r.region}`).join("，");
-
-  // ===================== 风险评分（优化版：视觉+健壮性+暗色适配） =====================
+  // ===================== 风险评分（完全保留原逻辑）=====================
   const risk = ipData.fraudScore;
   let riskTxt = "检测失败", riskColor = C_SUB; 
   if (typeof risk === "number") {
@@ -248,7 +209,7 @@ export default async function(ctx) {
     : ipData.isResidential === false ? "🏢 机房" 
     : getIPType(pubIsp, asnInfo);
 
-  // ===================== 延迟颜色（适配暗色模式）=====================
+  // ===================== 延迟颜色（完全保留原逻辑）=====================
   let delayColor = C_SUB;
   if (realTcpDelay > 0) {
     if (realTcpDelay < 150) delayColor = C_GREEN;
@@ -260,12 +221,12 @@ export default async function(ctx) {
     else delayColor = C_RED;
   }
 
-  // ===================== 延迟文本（保留网络RTT/接口字段）=====================
+  // ===================== 延迟文本（完全保留原逻辑）=====================
   const delayText = realTcpDelay > 0 
     ? `${realTcpDelay}ms (网络RTT) / ${apiResponseTime || "—"}ms (接口)`
     : `${apiResponseTime || "—"}ms (接口)`;
 
-  // ===================== UI 组件（优化视觉一致性）=====================
+  // ===================== UI 组件（完全保留原逻辑）=====================
   const Row = (ic, icCol, label, val, valCol) => ({
     type: "stack", direction: "row", alignItems: "center", padding: [3, 0],
     children: [
@@ -277,7 +238,7 @@ export default async function(ctx) {
     ]
   });
 
-  // ===================== 最终返回（适配暗色模式）=====================
+  // ===================== 最终返回（完全保留原UI结构）=====================
   return {
     type: "widget",
     padding: [8, 10],
@@ -295,15 +256,13 @@ export default async function(ctx) {
           { type: "text", text: delayText, font: { size:10, weight:"medium" }, textColor: getThemeColor(delayColor) }
         ]
       },
-      // 移除内网IP字段
+      Row("iphone", C_GREEN, "内网IP", localIp, C_TEXT),
       Row("globe", C_BLUE, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT),
       Row("mappin", C_SUB, "位置", pubLoc, C_TEXT),
       Row("paperplane.fill", C_BLUE, "落地IP", `${nIp} ${ipType}`, C_TEXT),
       Row("mappin", C_SUB, "落地地区", nLoc, C_TEXT),
       Row("number.square.fill", C_SUB, "ASN", asnInfo, C_TEXT),
       Row("shield.fill", riskColor, "风险评分", riskTxt, riskColor),
-      // 解锁字段添加到风险评分下方
-      Row("play.tv.fill", C_BLUE, "解锁检测", unlockText, C_TEXT)
     ]
   };
 }
