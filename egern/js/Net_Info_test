@@ -1,17 +1,20 @@
 /**
- * 📌  ASN失败兜底 · 网络差也能用 · 样式不变 · GPT解锁精准检测
+ * 📌  ASN失败兜底 · 样式精简 · 深度流媒体解锁
  */
 export default async function(ctx) {
   const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
   const C_TEXT  = { light: '#000000', dark: '#FFFFFF' };
-  const C_SUB   = { light: '#6E6E7A', dark: '#8E8E93' };
+  const C_SUB   = { light: '#6E6E73', dark: '#8E8E93' };
   const C_BLUE  = { light: '#007AFF', dark: '#0A84FF' };
   const C_GREEN = { light: '#34C759', dark: '#30D158' };
   const C_ORANGE= { light: '#FF9500', dark: '#FF9F0A' };
   const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
   const C_YELLOW= { light: '#FFCC00', dark: '#FFD60A' };
 
-  // ===================== 【三层兜底】运营商识别 =====================
+  // 模拟真实浏览器 UA
+  const BASE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
+
+  // ===================== 【运营商识别逻辑】 =====================
   function getISPByASN(asn) {
     const asnCode = (asn || '').trim().replace(/^AS/, '');
     switch (asnCode) {
@@ -25,24 +28,19 @@ export default async function(ctx) {
   function getISPByIPIP(rawIsp, locArr) {
     const s = (rawIsp || '').toLowerCase();
     const area1 = (locArr[1] || '').toLowerCase();
-
     if (area1.includes('香港')) {
       if (s.includes('mobile') || s.includes('移动')) return 'CMHK';
       if (s.includes('telecom') || s.includes('电信')) return 'CTHK';
       return '香港运营商';
     }
-    if (area1.includes('澳门')) {
-      return 'CTM';
-    }
-
+    if (area1.includes('澳门')) return 'CTM';
     if (/(移动|cmcc)/i.test(s)) return '中国移动';
     if (/(电信|chinanet)/i.test(s)) return '中国电信';
-    if (/(联通|unicorn)/i.test(s)) return '中国联通';
+    if (/(联通|unicom)/i.test(s)) return '中国联通';
     return '未知运营商';
   }
 
   const DEFAULT_ISP = '未知运营商';
-
   const cityMap = { tokyo: '东京', osaka: '大阪', kyoto: '京都' };
   const regionMap = { tokyo: '东京都', osaka: '大阪府' };
 
@@ -50,168 +48,106 @@ export default async function(ctx) {
 
   const d = ctx.device || {};
   const isWifi = !!d.wifi?.ssid;
-
   let netName = "未连接", netIcon = "antenna.radiowaves.left.and.right";
   if (isWifi) {
     netName = d.wifi.ssid || "Wi‑Fi";
     netIcon = "wifi";
   } else if (d.cellular?.radio) {
-    const radioMap = {
-      "GPRS": "2.5G", "EDGE": "2.75G", "WCDMA": "3G",
-      "LTE": "LTE (4G)", "NR": "5G (SA)", "NRNSA": "5G (NSA)"
-    };
-    const rawRadio = d.cellular.radio?.toUpperCase().replace(/\s+/g, "") || "";
-    netName = `蜂窝: ${radioMap[rawRadio] || rawRadio || "5G"}`;
+    const radioMap = { "GPRS": "2.5G", "EDGE": "2.75G", "WCDMA": "3G", "LTE": "4G", "NR": "5G", "NRNSA": "5G" };
+    netName = `蜂窝: ${radioMap[d.cellular.radio?.toUpperCase()] || "5G"}`;
   }
 
-  // —————————————————— 直连IP（完全不动） ——————————————————
+  // —————————————————— 直连IP + 落地IP ——————————————————
   let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "";
-  try {
-    const res = await ctx.http.get('https://myip.ipip.net/json', {
-      headers: { 'User-Agent': 'Mozilla/5.0' }, 
-      timeout: 5000,
-      retry: 1
-    });
-    const body = await res.json();
-    if (body?.data) {
-      pubIp = body.data.ip || "—";
-      const locArr = body.data.location || [];
-      pubLoc = `🇨🇳 ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
-      const rawIspFromIPIP = locArr[4] || locArr[3] || '';
-
-      try {
-        const asnRes = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { 
-          timeout: 3000, retry: 1
-        });
-        pubASN = (await asnRes.text()).trim() || '';
-      } catch(e) {}
-
-      const fromAsn = getISPByASN(pubASN);
-      const fromIpip = getISPByIPIP(rawIspFromIPIP, locArr);
-      pubIsp = fromAsn || fromIpip || DEFAULT_ISP;
-    }
-  } catch (e) {}
-
-  // —————————————————— 落地IP（完全不动） ——————————————————
   let nIp = "—", nLoc = "—", asnInfo = "—", countryCode = "XX";
-  try {
-    const res = await ctx.http.get('https://ipinfo.io/json', { 
-      timeout: 5000, retry: 1
-    });
-    const dt = await res.json();
-    nIp = dt.ip || "—";
-    countryCode = (dt.country || "XX").toUpperCase();
-    const code = dt.country || "";
-    const flag = code ? String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) : "🌐";
-    const cityEn = (dt.city || "").toLowerCase();
-    const regionEn = (dt.region || "").toLowerCase();
-    const city = cityMap[cityEn] || dt.city || "";
-    const region = regionMap[regionEn] || dt.region || "";
-    nLoc = city === region ? `${flag} ${city}` : `${flag} ${region} ${city}`;
-    asnInfo = dt.org || "—";
-  } catch (e) {}
 
-  // —————————————————— 风险与延迟（不动） ——————————————————
-  let ipData = {}, costTime = 0;
-  try {
-    const start = Date.now();
-    const r = await ctx.http.get('https://my.ippure.com/v1/info', { 
-      timeout: 5000, retry: 1
-    });
-    costTime = Date.now() - start;
-    ipData = await r.json();
-  } catch (e) {}
-
-  const nativeText = ipData.isResidential
-    ? "🏠 住宅" : ipData.isResidential === false ? "🏢 机房" : "⟳ 检测中";
-  const nodeIpWithNative = `${nIp} ${nativeText}`;
-
-  const risk = ipData.fraudScore;
-  let riskTxt = "…", riskCol = C_SUB, riskIcon = "clock";
-  if (risk != null) {
-    if (risk >= 80) { riskTxt = `极高风险 ${risk}`; riskCol = C_RED; riskIcon = "xmark.shield.fill"; }
-    else if (risk >= 70) { riskTxt = `高风险 ${risk}`; riskCol = C_ORANGE; riskIcon = "exclamationmark.shield.fill"; }
-    else if (risk >= 40) { riskTxt = `中风险 ${risk}`; riskCol = C_YELLOW; riskIcon = "exclamationmark.shield.fill"; }
-    else { riskTxt = `纯净 ${risk}`; riskCol = C_GREEN; riskIcon = "checkmark.shield.fill"; }
-  }
-
-  // ===================== 🔥 核心修复：解锁检测（按你的建议）=====================
-  // Netflix 三段式检测（保留）
-  const checkNetflix = async () => {
+  // 并行获取基础 IP 信息
+  const fetchBaseInfo = async () => {
     try {
-      const fullRes = await ctx.http.get("https://www.netflix.com/title/80018499", { 
-        timeout: 3500, followRedirect: false 
-      });
-      if (fullRes.status === 200) {
-        const reg = fullRes.headers["x-netflix-originating-env"] || countryCode;
-        return { name: "奈飞", region: reg?.toUpperCase() || "OK" };
+      const [ipipRes, ipinfoRes] = await Promise.all([
+        ctx.http.get('https://myip.ipip.net/json', { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 5000 }).catch(() => null),
+        ctx.http.get('https://ipinfo.io/json', { timeout: 5000 }).catch(() => null)
+      ]);
+
+      if (ipipRes) {
+        const body = await ipipRes.json();
+        pubIp = body.data?.ip || "—";
+        const locArr = body.data?.location || [];
+        pubLoc = `🇨🇳 ${locArr[1] || ""} ${locArr[2] || ""}`.trim();
+        try {
+          const asnRes = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { timeout: 2000 });
+          pubASN = (await asnRes.text()).trim();
+        } catch(e) {}
+        pubIsp = getISPByASN(pubASN) || getISPByIPIP(locArr[4] || locArr[3], locArr) || DEFAULT_ISP;
       }
-      const basicRes = await ctx.http.get("https://www.netflix.com/title/81215567", { timeout: 3500 });
-      if (basicRes.status === 200) {
-        return { name: "奈飞", region: "🍿" };
+
+      if (ipinfoRes) {
+        const dt = await ipinfoRes.json();
+        nIp = dt.ip || "—";
+        countryCode = (dt.country || "XX").toUpperCase();
+        const flag = dt.country ? String.fromCodePoint(...dt.country.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) : "🌐";
+        const city = cityMap[dt.city?.toLowerCase()] || dt.city || "";
+        const region = regionMap[dt.region?.toLowerCase()] || dt.region || "";
+        nLoc = city === region ? `${flag} ${city}` : `${flag} ${region} ${city}`;
+        asnInfo = dt.org || "—";
       }
-      return { name: "奈飞", region: "❌" };
-    } catch (e) {
-      return { name: "奈飞", region: "❌" };
-    }
+    } catch(e) {}
   };
 
-  // 通用检测函数（升级UA+兼容状态码）
-  const checkUnlock = async (name, url, judge) => {
+  // —————————————————— 🔥 解锁深度检测 ——————————————————
+  const checkPlatform = async (name, url, isNetflix = false) => {
     try {
       const res = await ctx.http.get(url, {
-        timeout: 3500,
-        headers: { 
-          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-          "Accept-Language": "en-US,en;q=0.9",
-          "Referer": "https://google.com"
-        },
+        timeout: 4000,
+        headers: { "User-Agent": BASE_UA, "Accept-Language": "de-AT,de;q=0.9,en-AT;q=0.8,en;q=0.7" },
         followRedirect: false
       });
-      const result = await judge(res);
-      if (!result.ok) return { name, region: "❌" };
-      return { name, region: result.region || countryCode };
+
+      if (isNetflix) {
+        if (res.status === 200) {
+          const reg = res.headers["x-netflix-originating-env"];
+          return { name, region: reg ? reg.toUpperCase() : countryCode };
+        }
+        const res2 = await ctx.http.get("https://www.netflix.com/title/81215567", { timeout: 3000 });
+        return { name, region: res2.status === 200 ? "🍿" : "❌" };
+      }
+
+      // GPT/Gemini/Disney/TikTok 通用判定
+      const isOk = (res.status === 200 && !res.url.includes("error") && !res.url.includes("preview")) || res.status === 302;
+      return { name, region: isOk ? countryCode : "❌" };
     } catch (e) {
       return { name, region: "❌" };
     }
   };
 
-  // ===================== ✅ 按你的建议修复：GPT+Gemini 检测 =====================
-  const unlockTasks = [
-    // GPT：兼容200/302，联动落地地区
-    checkUnlock("GPT", "https://chatgpt.com/auth/login", async (r) => {
-      const ok = r.status === 200 || r.status === 302; // 200正常/302跳转均视为解锁
-      return { ok: ok, region: countryCode };
-    }),
-    checkNetflix(),
-    // TikTok：保留原有逻辑
-    checkUnlock("TkTk", "https://www.tiktok.com/", async (r) => {
-      return { ok: r.status !== 403, region: countryCode };
-    }),
-    // Gemini：升级UA+更宽松的判断
-    checkUnlock("Gemini", "https://gemini.google.com/", async (r) => {
-      const ok = r.status === 200 || r.status === 302; // 兼容跳转
-      return { ok: ok && !r.url.includes("error"), region: countryCode };
-    }),
-    // Disney+：保留原有逻辑
-    checkUnlock("Disney", "https://disneyplus.com", async (r) => {
-      return { ok: r.status === 200 && !r.url.includes("preview"), region: countryCode };
-    })
-  ];
+  // —————————————————— 执行所有任务 ——————————————————
+  const start = Date.now();
+  const [_, ipRes, results] = await Promise.all([
+    fetchBaseInfo(),
+    ctx.http.get('https://my.ippure.com/v1/info', { timeout: 5000 }).catch(() => null),
+    Promise.all([
+      checkPlatform("GPT", "https://chatgpt.com/auth/login"),
+      checkPlatform("奈飞", "https://www.netflix.com/title/80018499", true),
+      checkPlatform("TikTok", "https://www.tiktok.com/"),
+      checkPlatform("Gemini", "https://gemini.google.com/app"),
+      checkPlatform("Disney", "https://www.disneyplus.com")
+    ])
+  ]);
+  const costTime = Date.now() - start;
 
-  // 执行检测并格式化
-  const unlockResults = await Promise.all(unlockTasks);
-  const unlockText = unlockResults.map(r => {
-    if (r.region === "❌" || r.region === "🍿") return `${r.name} ${r.region}`;
-    const finalReg = (r.region && r.region !== "OK") ? r.region : countryCode || "XX";
-    return `${r.name} ${finalReg}`;
-  }).join("，");
+  // 格式化解锁输出
+  const unlockText = results.map(r => `${r.name} ${r.region}`).join("，");
 
-  // —————————————————— 延迟计算（不动） ——————————————————
-  const delayText = costTime > 0 ? `${costTime}ms` : "…";
-  const delayColor = costTime > 300 ? C_RED : costTime > 100 ? C_YELLOW : C_GREEN;
+  // 风险得分解析
+  let ipData = {}; try { if (ipRes) ipData = await ipRes.json(); } catch(e) {}
+  const risk = ipData.fraudScore;
+  let riskTxt = "…", riskCol = C_SUB, riskIcon = "clock";
+  if (risk != null) {
+    if (risk >= 70) { riskTxt = `高风险 ${risk}`; riskCol = C_RED; riskIcon = "xmark.shield.fill"; }
+    else if (risk >= 40) { riskTxt = `中风险 ${risk}`; riskCol = C_ORANGE; riskIcon = "exclamationmark.shield.fill"; }
+    else { riskTxt = `纯净 ${risk}`; riskCol = C_GREEN; riskIcon = "checkmark.shield.fill"; }
+  }
 
-  // ===================== 样式（不动） =====================
   const Row = (ic, icCol, label, val, valCol) => ({
     type: 'stack', direction: 'row', alignItems: 'center', padding: [3, 0],
     children: [
@@ -228,7 +164,6 @@ export default async function(ctx) {
     padding: [8, 10],
     backgroundColor: BG_CARD,
     cornerRadius: 12,
-    refreshPolicy: { onNetworkChange: true, onEnter: true, timeout: 10 },
     children: [
       {
         type: 'stack', direction: 'row', alignItems: 'center', padding: [2,0,4,0],
@@ -237,16 +172,16 @@ export default async function(ctx) {
           { type: 'spacer', length:5 },
           { type: 'text', text: netName, font: { size:13, weight:'semibold' }, textColor: C_TEXT },
           { type: 'spacer' },
-          { type: 'text', text: delayText, font: { size:12, weight:'medium' }, textColor: delayColor }
+          { type: 'text', text: `${costTime}ms`, font: { size:12, weight:'medium' }, textColor: costTime < 200 ? C_GREEN : C_ORANGE }
         ]
       },
       Row("globe", C_BLUE, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT),
       Row("mappin", C_SUB, "位置", pubLoc, C_TEXT),
-      Row("paperplane.fill", C_BLUE, "落地IP", nodeIpWithNative, C_TEXT),
+      Row("paperplane.fill", C_BLUE, "落地IP", `${nIp} ${ipData.isResidential ? "🏠" : "🏢"}`, C_TEXT),
       Row("mappin", C_SUB, "落地", nLoc, C_TEXT),
       Row("number.square.fill", C_SUB, "ASN", asnInfo, C_TEXT),
       Row(riskIcon, riskCol, "风险", riskTxt, riskCol),
-      Row("play.rectangle", C_BLUE, "解锁", unlockText, C_TEXT)
+      Row("play.tv.fill", C_BLUE, "解锁", unlockText, C_TEXT),
     ]
   };
 }
