@@ -1,5 +1,5 @@
 /**
- * 📌  ASN失败兜底 · 网络差也能用 · 样式不变 · 解锁修复
+ * 📌  ASN失败兜底 · 网络差也能用 · 样式不变 · GPT解锁精准检测
  */
 export default async function(ctx) {
   const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
@@ -64,7 +64,7 @@ export default async function(ctx) {
     netName = `蜂窝: ${radioMap[rawRadio] || rawRadio || "5G"}`;
   }
 
-  // —————————————————— 直连IP（完全不动，只修复运营商） ——————————————————
+  // —————————————————— 直连IP（完全不动） ——————————————————
   let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "";
   try {
     const res = await ctx.http.get('https://myip.ipip.net/json', {
@@ -86,7 +86,6 @@ export default async function(ctx) {
         pubASN = (await asnRes.text()).trim() || '';
       } catch(e) {}
 
-      // 修复：确保一定能拿到运营商
       const fromAsn = getISPByASN(pubASN);
       const fromIpip = getISPByIPIP(rawIspFromIPIP, locArr);
       pubIsp = fromAsn || fromIpip || DEFAULT_ISP;
@@ -136,7 +135,8 @@ export default async function(ctx) {
     else { riskTxt = `纯净 ${risk}`; riskCol = C_GREEN; riskIcon = "checkmark.shield.fill"; }
   }
 
-  // ===================== 🔥 解锁检测（只修复 GPT，其余不变）=====================
+  // ===================== 🔥 核心修复：解锁检测（按你的建议）=====================
+  // Netflix 三段式检测（保留）
   const checkNetflix = async () => {
     try {
       const fullRes = await ctx.http.get("https://www.netflix.com/title/80018499", { 
@@ -156,49 +156,62 @@ export default async function(ctx) {
     }
   };
 
-const checkUnlock = async (name, url, judge) => {
-  try {
-    const res = await ctx.http.get(url, {
-      timeout: 3500,
-      headers: { "User-Agent": "Mozilla/5.0" },
-      followRedirect: false
-    });
-    const result = await judge(res);
-    if (!result.ok) return { name, region: "❌" };
-    return { name, region: result.region || countryCode };
-  } catch (e) {
-    return { name, region: "❌" };
-  }
-};
-
-  // ===================== ✅ 修复：GPT 解锁判断（真实可用）=====================
-const unlockTasks = [
-  checkUnlock("GPT", "https://chatgpt.com/cdn-cgi/trace", async (r) => {
-    const ok = r.status === 200;
-    if (ok) {
-      const txt = await r.text().catch(() => "");
-      const m = txt.match(/loc=([A-Za-z]{2})/);
-      return { ok: true, region: m ? m[1].toUpperCase() : countryCode };
+  // 通用检测函数（升级UA+兼容状态码）
+  const checkUnlock = async (name, url, judge) => {
+    try {
+      const res = await ctx.http.get(url, {
+        timeout: 3500,
+        headers: { 
+          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Referer": "https://google.com"
+        },
+        followRedirect: false
+      });
+      const result = await judge(res);
+      if (!result.ok) return { name, region: "❌" };
+      return { name, region: result.region || countryCode };
+    } catch (e) {
+      return { name, region: "❌" };
     }
-    return { ok: false };
-  }),
-  checkNetflix(),
-  checkUnlock("TkTk", "https://www.tiktok.com/", r => ({ ok: r.status !== 403 })),
-  checkUnlock("Gemini", "https://gemini.google.com/", r => ({ ok: r.status === 200 && !r.url.includes("error") })),
-  checkUnlock("Disney", "https://disneyplus.com", r => ({ ok: r.status === 200 && !r.url.includes("preview") }))
-];
+  };
 
+  // ===================== ✅ 按你的建议修复：GPT+Gemini 检测 =====================
+  const unlockTasks = [
+    // GPT：兼容200/302，联动落地地区
+    checkUnlock("GPT", "https://chatgpt.com/auth/login", async (r) => {
+      const ok = r.status === 200 || r.status === 302; // 200正常/302跳转均视为解锁
+      return { ok: ok, region: countryCode };
+    }),
+    checkNetflix(),
+    // TikTok：保留原有逻辑
+    checkUnlock("TkTk", "https://www.tiktok.com/", async (r) => {
+      return { ok: r.status !== 403, region: countryCode };
+    }),
+    // Gemini：升级UA+更宽松的判断
+    checkUnlock("Gemini", "https://gemini.google.com/", async (r) => {
+      const ok = r.status === 200 || r.status === 302; // 兼容跳转
+      return { ok: ok && !r.url.includes("error"), region: countryCode };
+    }),
+    // Disney+：保留原有逻辑
+    checkUnlock("Disney", "https://disneyplus.com", async (r) => {
+      return { ok: r.status === 200 && !r.url.includes("preview"), region: countryCode };
+    })
+  ];
+
+  // 执行检测并格式化
   const unlockResults = await Promise.all(unlockTasks);
-
   const unlockText = unlockResults.map(r => {
     if (r.region === "❌" || r.region === "🍿") return `${r.name} ${r.region}`;
     const finalReg = (r.region && r.region !== "OK") ? r.region : countryCode || "XX";
     return `${r.name} ${finalReg}`;
   }).join("，");
 
+  // —————————————————— 延迟计算（不动） ——————————————————
   const delayText = costTime > 0 ? `${costTime}ms` : "…";
   const delayColor = costTime > 300 ? C_RED : costTime > 100 ? C_YELLOW : C_GREEN;
 
+  // ===================== 样式（不动） =====================
   const Row = (ic, icCol, label, val, valCol) => ({
     type: 'stack', direction: 'row', alignItems: 'center', padding: [3, 0],
     children: [
