@@ -7,7 +7,7 @@ export default async function(ctx) {
   const C_GREEN = { light: '#34C759', dark: '#30D158' };
   const C_ORANGE= { light: '#FF9500', dark: '#FF9F0A' };
   const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
-  const C_YELLOW = { light: '#FFCC00', dark: '#FFD60A' };
+  const C_YELLOW= { light: '#FFCC00', dark: '#FFD60A' };
 
   // ===================== IP类型判断 =====================
   function getIPType(isp, org) {
@@ -123,56 +123,56 @@ export default async function(ctx) {
 
   const localIp = d.ipv4?.address || "—";
 
-  // ===================== 🔥 核心重构：全并行探测（你的精准方案）=====================
-  // 1. 定义所有Promise任务（先定义，不执行）
-  const ipipPromise = ctx.http.get('https://myip.ipip.net/json', {
-    headers: { 'User-Agent': 'Mozilla/5.0' }, 
+  // ===================== 🔥 最终修正版：独立计时逻辑（你的科学方案）=====================
+  // 记录全局起点（所有任务统一计时基准）
+  const globalStart = Date.now();
+
+  // 1. 网络 RTT 探测（独立计时，内部完成耗时计算）
+  let realTcpDelay = 0;
+  const pingTask = ctx.http.get('https://1.1.1.1/cdn-cgi/trace', { timeout: 2500 })
+    .then(() => { 
+      // 仅计算网络传输耗时，无其他干扰
+      realTcpDelay = Date.now() - globalStart; 
+    })
+    .catch(() => { 
+      realTcpDelay = 0; 
+    });
+
+  // 2. ippure 接口探测（独立计时，剔除JSON解析耗时）
+  let ipData = {}, apiResponseTime = 0;
+  const ippureTask = ctx.http.get('https://my.ippure.com/v1/info', { timeout: 5000 })
+    .then(async (res) => {
+      // 记录JSON解析开始时间
+      const startParse = Date.now();
+      // 解析JSON（内存操作，耗时极短）
+      ipData = await res.json();
+      // 核心计算：接口延迟 = 总耗时 - JSON解析耗时
+      // 得到纯粹的网络传输+服务器处理耗时
+      apiResponseTime = (Date.now() - globalStart) - (Date.now() - startParse);
+    })
+    .catch(() => { 
+      apiResponseTime = 0; 
+    });
+
+  // 3. 其他 IP 信息请求（仅获取数据，不计时）
+  const ipipPromise = ctx.http.get('https://myip.ipip.net/json', { 
+    headers: { 'User-Agent': 'Mozilla/5.0' },
     timeout: 5000,
     retry: 1
-  }).catch(() => ({}));
+  }).catch(() => null);
 
   const ipinfoPromise = ctx.http.get('https://ipinfo.io/json', { 
     timeout: 5000,
     retry: 1
-  }).catch(() => ({}));
+  }).catch(() => null);
 
-  const ippurePromise = ctx.http.get('https://my.ippure.com/v1/info', { 
-    timeout: 5000,
-    retry: 1
-  }).catch(() => ({}));
-
-  // 2. 全并行计时起点（所有任务同一时间开始）
-  const startAll = Date.now();
-
-  // 3. 极速HTTPS探测任务（Cloudflare边缘节点，最准的网络RTT）
-  const pingTask = ctx.http.get('https://1.1.1.1/cdn-cgi/trace', { timeout: 2500 })
-    .then(() => Date.now() - startAll)  // 同一计时起点，精准计算
-    .catch(() => 0);
-
-  // 4. ASN请求需要依赖ipip结果，先定义空Promise
-  let asnPromise = Promise.resolve("");
-  let ipData = {}, apiResponseTime = 0;
-
-  // 5. 全并行执行所有任务（不准排队！）
-  const [realTcpDelay, ipipResRaw, ipinfoResRaw, pureResRaw] = await Promise.all([
+  // 4. 全并行执行所有任务（无排队，统一基准）
+  const [_, __, ipipResRaw, ipinfoResRaw] = await Promise.all([
     pingTask,
+    ippureTask,
     ipipPromise,
-    ipinfoPromise,
-    ippurePromise
+    ipinfoPromise
   ]);
-
-  // 6. 单独计算ippure接口响应时间（补充接口延迟）
-  if (pureResRaw) {
-    try {
-      const pureStart = Date.now();
-      const pureData = await pureResRaw.json();
-      apiResponseTime = Date.now() - pureStart;
-      ipData = pureData;
-    } catch (e) {
-      apiResponseTime = 0;
-      ipData = {};
-    }
-  }
 
   // ===================== 直连IP解析 =====================
   let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "";
@@ -182,7 +182,7 @@ export default async function(ctx) {
       if (body?.data) {
         pubIp = body.data.ip || "—";
         
-        // 获取ASN（并行执行）
+        // 获取ASN
         if (body.data.ip) {
           pubASN = await ctx.http.get(`https://ipapi.co/${body.data.ip}/asn/`, { 
             timeout: 3000,
@@ -233,29 +233,29 @@ export default async function(ctx) {
   const nodeIpWithNative = `${nIp} ${nativeText}`;
 
   const risk = ipData.fraudScore;
-  let riskTxt = "…", riskCol = C_SUB, riskIcon = "clock";
+  let riskTxt = "…", riskCol = C_SUB.light, riskIcon = "clock";
   if (risk != null) {
-    if (risk >= 80) { riskTxt = `极高风险 ${risk}`; riskCol = C_RED; riskIcon = "xmark.shield.fill"; }
-    else if (risk >= 70) { riskTxt = `高风险 ${risk}`; riskCol = C_ORANGE; riskIcon = "exclamationmark.shield.fill"; }
-    else if (risk >= 40) { riskTxt = `中风险 ${risk}`; riskCol = C_YELLOW; riskIcon = "exclamationmark.shield.fill"; }
-    else { riskTxt = `纯净 ${risk}`; riskCol = C_GREEN; riskIcon = "checkmark.shield.fill"; }
+    if (risk >= 80) { riskTxt = `极高风险 ${risk}`; riskCol = C_RED.light; riskIcon = "xmark.shield.fill"; }
+    else if (risk >= 70) { riskTxt = `高风险 ${risk}`; riskCol = C_ORANGE.light; riskIcon = "exclamationmark.shield.fill"; }
+    else if (risk >= 40) { riskTxt = `中风险 ${risk}`; riskCol = C_YELLOW.light; riskIcon = "exclamationmark.shield.fill"; }
+    else { riskTxt = `纯净 ${risk}`; riskCol = C_GREEN.light; riskIcon = "checkmark.shield.fill"; }
   }
 
-  // ===================== 延迟显示（精准双指标）=====================
-  // 文本拼接（真实网络RTT + 接口响应时间）
+  // ===================== 延迟显示（科学精准）=====================
+  // 文本拼接（真实网络RTT + 纯接口传输耗时）
   const tcpText = realTcpDelay > 0 ? `${realTcpDelay}ms (网络RTT)` : "— (网络RTT)";
   const apiText = apiResponseTime > 0 ? `${apiResponseTime}ms (接口)` : "— (接口)";
   const delayText = `${tcpText} / ${apiText}`;
 
-  // 颜色按真实网络RTT判定（最准）
-  let delayColor = C_SUB;
-  if (realTcpDelay > 150) delayColor = C_RED;    // 高延迟
-  else if (realTcpDelay > 80) delayColor = C_YELLOW; // 中延迟
-  else if (realTcpDelay > 0) delayColor = C_GREEN;    // 低延迟
+  // 颜色按真实网络RTT判定
+  let delayColor = C_SUB.light;
+  if (realTcpDelay > 150) delayColor = C_RED.light;    // 高延迟
+  else if (realTcpDelay > 80) delayColor = C_YELLOW.light; // 中延迟
+  else if (realTcpDelay > 0) delayColor = C_GREEN.light;    // 低延迟
   // 降级逻辑
-  else if (apiResponseTime > 300) delayColor = C_RED;
-  else if (apiResponseTime > 100) delayColor = C_YELLOW;
-  else if (apiResponseTime > 0) delayColor = C_GREEN;
+  else if (apiResponseTime > 300) delayColor = C_RED.light;
+  else if (apiResponseTime > 100) delayColor = C_YELLOW.light;
+  else if (apiResponseTime > 0) delayColor = C_GREEN.light;
 
   // ===================== UI组件 =====================
   const Row = (ic, icCol, label, val, valCol) => ({
@@ -263,7 +263,7 @@ export default async function(ctx) {
     children: [
       { type: 'image', src: `sf-symbol:${ic}`, color: icCol, width: 12, height: 12 },
       { type: 'spacer', length: 5 },
-      { type: 'text', text: label, font: { size: 10 }, textColor: C_SUB },
+      { type: 'text', text: label, font: { size: 10 }, textColor: C_SUB.light },
       { type: 'spacer' },
       { type: 'text', 
         text: val, 
@@ -279,7 +279,7 @@ export default async function(ctx) {
   return {
     type: 'widget',
     padding: [8, 10],
-    backgroundColor: BG_CARD,
+    backgroundColor: BG_CARD.light,
     cornerRadius: 12,
     refreshPolicy: { 
       onNetworkChange: true,
@@ -290,20 +290,20 @@ export default async function(ctx) {
       {
         type: 'stack', direction: 'row', alignItems: 'center', padding: [2,0,4,0],
         children: [
-          { type: 'image', src: `sf-symbol:${netIcon}`, color: C_BLUE, width:14, height:14 },
+          { type: 'image', src: `sf-symbol:${netIcon}`, color: C_BLUE.light, width:14, height:14 },
           { type: 'spacer', length:5 },
-          { type: 'text', text: netName, font: { size:13, weight:'semibold' }, textColor: C_TEXT },
+          { type: 'text', text: netName, font: { size:13, weight:'semibold' }, textColor: C_TEXT.light },
           { type: 'spacer' },
           { type: 'text', text: delayText, font: { size:10, weight:'medium' }, textColor: delayColor }
         ]
       },
-      Row("iphone", C_GREEN, "内网IP", localIp, C_TEXT),
-      Row("globe", C_BLUE, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT),
-      Row("mappin", C_SUB, "位置", pubLoc, C_TEXT),
-      Row("paperplane.fill", C_BLUE, "落地IP", nodeIpWithNative, C_TEXT),
-      Row("mappin", C_SUB, "落地", nLoc, C_TEXT),
-      Row("number.square.fill", C_SUB, "ASN", asnInfo, C_TEXT),
-      Row(riskIcon, riskCol, "风险", riskTxt, riskCol),
+      Row("iphone", C_GREEN.light, "内网IP", localIp, C_TEXT.light),
+      Row("globe", C_BLUE.light, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT.light),
+      Row("mappin", C_SUB.light, "位置", pubLoc, C_TEXT.light),
+      Row("paperplane.fill", C_BLUE.light, "落地IP", nodeIpWithNative, C_TEXT.light),
+      Row("mappin", C_SUB.light, "落地", nLoc, C_TEXT.light),
+      Row("number.square.fill", C_SUB.light, "ASN", asnInfo, C_TEXT.light),
+      Row(riskIcon, riskCol, "风险", riskTxt, C_TEXT.light),
     ]
   };
 }
