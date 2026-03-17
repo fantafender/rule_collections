@@ -9,9 +9,7 @@ export default async function(ctx) {
   const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
 
   // ===================== 辅助函数：获取系统主题适配的颜色 =====================
-  // 自动根据系统模式返回对应颜色值
   const getThemeColor = (colorObj) => {
-    // 检测系统暗色模式（Egern 环境通用检测方式）
     const isDarkMode = ctx?.device?.colorScheme === 'dark' || false;
     return isDarkMode ? colorObj.dark : colorObj.light;
   };
@@ -91,9 +89,8 @@ export default async function(ctx) {
     const map = { "GPRS": "2G", "EDGE": "2G", "WCDMA": "3G", "LTE": "4G", "NR": "5G", "NRNSA": "5G" };
     netName = `蜂窝: ${map[r] || r || "5G"}`;
   }
-  const localIp = d.ipv4?.address || "—";
 
-  // ===================== 🔥 科学计时：独立内部计时 =====================
+  // ===================== 🔥 科学计时 + 流媒体/AI解锁检测（核心新增）=====================
   const globalStart = Date.now();
 
   // 1. 网络 RTT（HTTPS 真实延迟）
@@ -113,7 +110,43 @@ export default async function(ctx) {
     })
     .catch(() => { apiResponseTime = 0; });
 
-  // 3. 其他信息
+  // 3. 流媒体/AI解锁检测（精准获取地区+状态）
+  // 3.1 ChatGPT 检测（提取loc地区）
+  const chatGPTCheck = ctx.http.get("https://chat.openai.com/cdn-cgi/trace", { timeout: 3000 })
+    .then(async (res) => {
+      const traceText = await res.text();
+      const locMatch = traceText.match(/loc=(\w+)/); // 提取地区代码（US/GB/JP等）
+      return locMatch ? { unlocked: true, region: locMatch[1] } : { unlocked: false, region: "" };
+    }).catch(() => ({ unlocked: false, region: "" }));
+
+  // 3.2 Netflix 检测（提取地区+验证解锁）
+  const netflixCheck = ctx.http.get("https://www.netflix.com/title/81215567", { timeout: 3000 })
+    .then(async (res) => {
+      if (res.status !== 200) return { unlocked: false, region: "" };
+      // 提取Netflix解锁地区（响应头/页面内容）
+      const regionHeader = res.headers.get("x-netflix-originating-env") || "";
+      const regionMatch = regionHeader.match(/(\w{2})/) || res.url.match(/\/(\w{2})\//);
+      const region = regionMatch ? regionMatch[1].toUpperCase() : "US"; // 默认US
+      return { unlocked: true, region: region };
+    }).catch(() => ({ unlocked: false, region: "" }));
+
+  // 3.3 TikTok 检测（提取地区）
+  const tiktokCheck = ctx.http.get("https://www.tiktok.com/cdn-cgi/trace", { timeout: 3000 })
+    .then(async (res) => {
+      const traceText = await res.text();
+      const locMatch = traceText.match(/loc=(\w+)/);
+      return locMatch ? { unlocked: true, region: locMatch[1] } : { unlocked: false, region: "" };
+    }).catch(() => ({ unlocked: false, region: "" }));
+
+  // 3.4 Gemini 检测（提取地区）
+  const geminiCheck = ctx.http.get("https://gemini.google.com/cdn-cgi/trace", { timeout: 3000 })
+    .then(async (res) => {
+      const traceText = await res.text();
+      const locMatch = traceText.match(/loc=(\w+)/);
+      return locMatch ? { unlocked: true, region: locMatch[1] } : { unlocked: false, region: "" };
+    }).catch(() => ({ unlocked: false, region: "" }));
+
+  // 4. 其他 IP 信息请求
   const ipipPromise = ctx.http.get("https://myip.ipip.net/json", {
     headers: { "User-Agent": "Mozilla/5.0" }, timeout: 5000
   }).catch(() => null);
@@ -121,10 +154,14 @@ export default async function(ctx) {
   const ipinfoPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 })
     .catch(() => null);
 
-  // 并行执行
-  const [_, __, ipipResRaw, ipinfoResRaw] = await Promise.all([
+  // 5. 全并行执行所有任务
+  const [_, __, chatGPTRes, netflixRes, tiktokRes, geminiRes, ipipResRaw, ipinfoResRaw] = await Promise.all([
     pingTask,
     ippureTask,
+    chatGPTCheck,
+    netflixCheck,
+    tiktokCheck,
+    geminiCheck,
     ipipPromise,
     ipinfoPromise
   ]);
@@ -162,21 +199,18 @@ export default async function(ctx) {
     } catch (e) {}
   }
 
-  // ===================== 风险评分（优化版：视觉+健壮性+暗色适配） =====================
+  // ===================== 风险评分（优化版） =====================
   const risk = ipData.fraudScore;
-  // 1. 兜底显示优化：默认检测失败，避免显示—
   let riskTxt = "检测失败", riskColor = C_SUB; 
-  
-  // 2. 逻辑保留，文案优化更符合行业表述
   if (typeof risk === "number") {
     if (risk < 30) {
-      riskTxt = `极高纯净 (${risk})`;    // 更专业的表述
+      riskTxt = `极高纯净 (${risk})`;
       riskColor = C_GREEN;
     } else if (risk < 60) {
-      riskTxt = `中等风险 (${risk})`;    // 更精准的分级
+      riskTxt = `中等风险 (${risk})`;
       riskColor = C_YELLOW;
     } else {
-      riskTxt = `高风险警告 (${risk})`;  // 醒目提示
+      riskTxt = `高风险警告 (${risk})`;
       riskColor = C_RED;
     }
   }
@@ -186,7 +220,6 @@ export default async function(ctx) {
     : getIPType(pubIsp, asnInfo);
 
   // ===================== 延迟颜色（适配暗色模式）=====================
-  // 🟢 <150 优秀 | 🟡 150-350 良好 | 🔴 >350 差
   let delayColor = C_SUB;
   if (realTcpDelay > 0) {
     if (realTcpDelay < 150) delayColor = C_GREEN;
@@ -198,13 +231,25 @@ export default async function(ctx) {
     else delayColor = C_RED;
   }
 
-  // ===================== 延迟文本（保留网络RTT/接口字段）=====================
+  // ===================== 解锁状态格式化（核心：按你的要求）=====================
+  const unlockItems = [];
+  // ChatGPT：解锁显示地区，未解锁显示❌
+  unlockItems.push(chatGPTRes.unlocked ? `ChatGPT ${chatGPTRes.region}` : `ChatGPT ❌`);
+  // Netflix：解锁显示地区，未解锁显示❌
+  unlockItems.push(netflixRes.unlocked ? `Netflix ${netflixRes.region}` : `Netflix ❌`);
+  // TikTok：解锁显示地区，未解锁显示❌
+  unlockItems.push(tiktokRes.unlocked ? `TikTok ${tiktokRes.region}` : `TikTok ❌`);
+  // Gemini：解锁显示地区，未解锁显示❌
+  unlockItems.push(geminiRes.unlocked ? `Gemini ${geminiRes.region}` : `Gemini ❌`);
+  // 拼接成最终显示文本（用逗号分隔）
+  const unlockText = unlockItems.join("，");
+
+  // ===================== 延迟文本 =====================
   const delayText = realTcpDelay > 0 
     ? `${realTcpDelay}ms (网络RTT) / ${apiResponseTime || "—"}ms (接口)`
     : `${apiResponseTime || "—"}ms (接口)`;
 
-  // ===================== UI 组件（优化视觉一致性）=====================
-  // 优化点：标签用灰色（C_SUB），仅数值/图标用主题色，避免杂乱
+  // ===================== UI 组件 =====================
   const Row = (ic, icCol, label, val, valCol) => ({
     type: "stack", direction: "row", alignItems: "center", padding: [3, 0],
     children: [
@@ -216,11 +261,11 @@ export default async function(ctx) {
     ]
   });
 
-  // ===================== 最终返回（适配暗色模式）=====================
+  // ===================== 最终返回（删除内网IP，新增解锁情况）=====================
   return {
     type: "widget",
     padding: [8, 10],
-    backgroundColor: getThemeColor(BG_CARD), // 背景自适应
+    backgroundColor: getThemeColor(BG_CARD),
     cornerRadius: 12,
     refreshPolicy: { onNetworkChange: true, onEnter: true, timeout: 10 },
     children: [
@@ -234,15 +279,15 @@ export default async function(ctx) {
           { type: "text", text: delayText, font: { size:10, weight:"medium" }, textColor: getThemeColor(delayColor) }
         ]
       },
-      // 优化视觉：仅图标用主题色，文字用默认色，避免全彩杂乱
-      Row("iphone", C_GREEN, "内网IP", localIp, C_TEXT),
+      // 已删除内网IP行
       Row("globe", C_BLUE, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT),
       Row("mappin", C_SUB, "位置", pubLoc, C_TEXT),
       Row("paperplane.fill", C_BLUE, "落地IP", `${nIp} ${ipType}`, C_TEXT),
       Row("mappin", C_SUB, "落地地区", nLoc, C_TEXT),
       Row("number.square.fill", C_SUB, "ASN", asnInfo, C_TEXT),
-      // 风险评分：仅数值/图标变色，标签保持灰色，视觉更整洁
       Row("shield.fill", riskColor, "风险评分", riskTxt, riskColor),
+      // 新增：解锁情况行（在风险评分下方）
+      Row("play.rectangle", C_BLUE, "解锁情况", unlockText, C_TEXT)
     ]
   };
 }
