@@ -47,6 +47,34 @@ export default async function(ctx) {
     return '未知运营商';
   }
 
+  // ✅ 新增：稳定国旗函数（仅修复这里）
+  function getFlagFromIPIP(locArr) {
+    const country = locArr[0] || "";
+
+    const map = {
+      "中国": "CN",
+      "日本": "JP",
+      "美国": "US",
+      "法国": "FR",
+      "德国": "DE",
+      "新加坡": "SG",
+      "英国": "GB"
+    };
+
+    let code = map[country];
+
+    if (!code) {
+      if (locArr[1]?.includes('香港')) code = 'HK';
+      else if (locArr[1]?.includes('澳门')) code = 'MO';
+    }
+
+    if (!code) return "🌐";
+
+    return String.fromCodePoint(
+      ...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt())
+    );
+  }
+
   const cityMap = { tokyo: '东京', osaka: '大阪', kyoto: '京都' };
   const regionMap = { tokyo: '东京都', osaka: '大阪府' };
 
@@ -72,7 +100,6 @@ export default async function(ctx) {
   const ipipPromise = ctx.http.get('https://myip.ipip.net/json', { timeout: 4000, retry: 1 });
   const ipinfoPromise = ctx.http.get('https://ipinfo.io/json', { timeout: 4000, retry: 1 });
 
-  // ippure 单独计时
   let costTime = 0;
   const ippurePromise = (async () => {
     try {
@@ -110,18 +137,15 @@ export default async function(ctx) {
             || getISPByIPIP(rawIsp, locArr)
             || "未知运营商";
 
-      let flag = '🇨🇳';
-      if (locArr[1]?.includes('法国')) flag = '🇫🇷';
-      else if (locArr[1]?.includes('香港')) flag = '🇭🇰';
-      else if (locArr[1]?.includes('澳门')) flag = '🇲🇴';
-      else if (locArr[0] !== '中国') flag = '🌐';
+      // ✅ 仅这里改动
+      const flag = getFlagFromIPIP(locArr);
 
       pubLoc = `${flag} ${locArr[1]||""} ${locArr[2]||""}`.trim();
 
     } catch {}
   }
 
-  // ===== 落地IP（完全恢复你的逻辑）=====
+  // ===== 落地IP（完全保持）=====
   let nIp="—", nLoc="—", asnInfo="—";
 
   if (ipinfoR.status === 'fulfilled') {
@@ -143,7 +167,7 @@ export default async function(ctx) {
     } catch {}
   }
 
-  // ===== 风险（恢复原样）=====
+  // ===== 风险 =====
   let riskTxt="…", riskCol=C_SUB, riskIcon="clock";
   const data = ipData.status === 'fulfilled' ? ipData.value : {};
 
@@ -167,7 +191,6 @@ export default async function(ctx) {
   const delayText = costTime > 0 ? `${costTime}ms` : "…";
   const delayColor = costTime > 300 ? C_RED : costTime > 100 ? C_YELLOW : C_GREEN;
 
-  // ===== UI保持不变 =====
   const Row = (ic, icCol, label, val, valCol) => ({
     type: 'stack', direction: 'row', alignItems: 'center', padding: [3, 0],
     children: [
