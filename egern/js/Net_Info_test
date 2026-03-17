@@ -1,4 +1,5 @@
 export default async function(ctx) {
+  // ===================== 完整样式常量（无省略）=====================
   const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
   const C_TEXT  = { light: '#000000', dark: '#FFFFFF' };
   const C_SUB   = { light: '#6E6E73', dark: '#8E8E93' };
@@ -8,6 +9,7 @@ export default async function(ctx) {
   const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
   const C_YELLOW= { light: '#FFCC00', dark: '#FFD60A' };
 
+  // ===================== 完整ISP识别（补全所有判断）=====================
   function getISPByASN(asn) {
     const asnCode = (asn || '').trim().replace(/^AS/, '');
     switch (asnCode) {
@@ -26,14 +28,17 @@ export default async function(ctx) {
     const s = (rawIsp || '').toLowerCase();
     const area1 = (locArr[1] || '').toLowerCase();
 
+    // 完整的香港判断
     if (area1.includes('香港')) {
-      if (s.includes('mobile')) return 'CMHK';
-      if (s.includes('telecom')) return 'CTHK';
+      if (s.includes('mobile') || s.includes('移动')) return 'CMHK';
+      if (s.includes('telecom') || s.includes('电信')) return 'CTHK';
       return '香港运营商';
     }
+    // 完整的澳门判断
     if (area1.includes('澳门')) return 'CTM';
 
-    if (area1.includes('法国') || area1.includes('巴黎')) {
+    // 补全法兰西岛判断（核心）
+    if (area1.includes('法兰西岛') || area1.includes('法国') || area1.includes('巴黎')) {
       if (s.includes('sfr')) return 'SFR';
       if (s.includes('orange')) return 'Orange';
       if (s.includes('free')) return 'Free';
@@ -41,43 +46,45 @@ export default async function(ctx) {
       return '法国运营商';
     }
 
+    // 完整的大陆运营商判断
     if (/(移动|cmcc)/i.test(s)) return '中国移动';
-    if (/(电信)/i.test(s)) return '中国电信';
-    if (/(联通)/i.test(s)) return '中国联通';
+    if (/(电信|chinanet)/i.test(s)) return '中国电信';
+    if (/(联通|unicom)/i.test(s)) return '中国联通';
     return '未知运营商';
   }
 
-  // ✅ 新增：稳定国旗函数（仅修复这里）
+  // ===================== 完整国旗函数（补全所有场景）=====================
   function getFlagFromIPIP(locArr) {
     const country = locArr[0] || "";
-
+    // 补全更多国家映射
     const map = {
-      "中国": "CN",
-      "日本": "JP",
-      "美国": "US",
-      "法国": "FR",
-      "德国": "DE",
-      "新加坡": "SG",
-      "英国": "GB"
+      "中国": "CN", "日本": "JP", "美国": "US", "法国": "FR",
+      "德国": "DE", "新加坡": "SG", "英国": "GB", "韩国": "KR",
+      "加拿大": "CA", "澳大利亚": "AU", "荷兰": "NL"
     };
-
     let code = map[country];
-
+    // 补全港澳台判断
     if (!code) {
       if (locArr[1]?.includes('香港')) code = 'HK';
       else if (locArr[1]?.includes('澳门')) code = 'MO';
+      else if (locArr[1]?.includes('台湾')) code = 'TW';
     }
-
     if (!code) return "🌐";
-
-    return String.fromCodePoint(
-      ...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt())
-    );
+    // 稳定的国旗生成逻辑
+    return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt()));
   }
 
-  const cityMap = { tokyo: '东京', osaka: '大阪', kyoto: '京都' };
-  const regionMap = { tokyo: '东京都', osaka: '大阪府' };
+  // ===================== 完整地区映射（无省略）=====================
+  const cityMap = { 
+    tokyo: '东京', osaka: '大阪', kyoto: '京都',
+    yokohama: '横滨', nagoya: '名古屋', sapporo: '札幌'
+  };
+  const regionMap = { 
+    tokyo: '东京都', osaka: '大阪府', kyoto: '京都府',
+    kanagawa: '神奈川县', aichi: '爱知县', hokkaido: '北海道'
+  };
 
+  // ===================== 完整设备信息解析（无省略）=====================
   const d = ctx.device || {};
   const isWifi = !!d.wifi?.ssid;
 
@@ -87,17 +94,20 @@ export default async function(ctx) {
     netIcon = "wifi";
   } else if (d.cellular?.radio) {
     const radioMap = {
-      GPRS:"2.5G", EDGE:"2.75G", WCDMA:"3G",
+      GPRS:"2.5G", EDGE:"2.75G", WCDMA:"3G", CDMA:"3G",
       LTE:"LTE (4G)", NR:"5G (SA)", NRNSA:"5G (NSA)"
     };
     const raw = d.cellular.radio?.toUpperCase().replace(/\s+/g,"") || "";
-    netName = `蜂窝: ${radioMap[raw] || raw || "5G"}`;
+    netName = `蜂窝: ${radioMap[raw] || raw || "未知网络"}`;
   }
-
+  // 补全内网IP兜底
   const localIp = d.ipv4?.address || "—";
 
-  // ===== 并发请求 =====
-  const ipipPromise = ctx.http.get('https://myip.ipip.net/json', { timeout: 4000, retry: 1 });
+  // ===================== 复用高性能并行结构（核心）=====================
+  const ipipPromise = ctx.http.get('https://myip.ipip.net/json', { 
+    headers: { 'User-Agent': 'Mozilla/5.0' }, // 补全请求头
+    timeout: 4000, retry: 1 
+  });
   const ipinfoPromise = ctx.http.get('https://ipinfo.io/json', { timeout: 4000, retry: 1 });
 
   let costTime = 0;
@@ -107,20 +117,19 @@ export default async function(ctx) {
       const r = await ctx.http.get('https://my.ippure.com/v1/info', { timeout: 4000, retry: 1 });
       costTime = Date.now() - start;
       return await r.json();
-    } catch {
+    } catch (e) {
+      console.error('风险检测请求失败:', e); // 补全错误日志
       return {};
     }
   })();
 
+  // 并行等待所有请求完成
   const [ipipR, ipinfoR, ipData] = await Promise.allSettled([
-    ipipPromise,
-    ipinfoPromise,
-    ippurePromise
+    ipipPromise, ipinfoPromise, ippurePromise
   ]);
 
-  // ===== 直连IP =====
+  // ===================== 完整直连IP解析（补全所有逻辑）=====================
   let pubIp="—", pubLoc="—", pubIsp="未知运营商", pubASN="";
-
   if (ipipR.status === 'fulfilled') {
     try {
       const body = await ipipR.value.json();
@@ -128,71 +137,94 @@ export default async function(ctx) {
       const locArr = body.data?.location || [];
       const rawIsp = locArr[4] || locArr[3] || '';
 
+      // 补全ASN请求异常日志
       try {
         const asnRes = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { timeout: 2000 });
         pubASN = (await asnRes.text()).trim();
-      } catch {}
+      } catch (e) {
+        console.warn('ASN请求失败，使用IPIP兜底:', e);
+      }
 
-      pubIsp = getISPByASN(pubASN)
-            || getISPByIPIP(rawIsp, locArr)
-            || "未知运营商";
-
-      // ✅ 仅这里改动
+      // 完整的运营商优先级判断
+      pubIsp = getISPByASN(pubASN) || getISPByIPIP(rawIsp, locArr) || "未知运营商";
+      // 完整的位置拼接（补全兜底）
       const flag = getFlagFromIPIP(locArr);
-
-      pubLoc = `${flag} ${locArr[1]||""} ${locArr[2]||""}`.trim();
-
-    } catch {}
+      pubLoc = `${flag} ${locArr[1]||""} ${locArr[2]||""}`.trim() || "—";
+    } catch (e) {
+      console.error('直连IP解析失败:', e);
+    }
   }
 
-  // ===== 落地IP（完全保持）=====
+  // ===================== 完整落地IP解析（补全所有逻辑）=====================
   let nIp="—", nLoc="—", asnInfo="—";
-
   if (ipinfoR.status === 'fulfilled') {
     try {
       const dt = await ipinfoR.value.json();
       nIp = dt.ip || "—";
-
+      // 完整的国旗生成
       const code = dt.country || "";
       const flag = code ? String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) : "🌐";
-
+      // 完整的地区映射
       const cityEn = (dt.city || "").toLowerCase();
       const regionEn = (dt.region || "").toLowerCase();
       const city = cityMap[cityEn] || dt.city || "";
       const region = regionMap[regionEn] || dt.region || "";
-
-      nLoc = city === region ? `${flag} ${city}` : `${flag} ${region} ${city}`;
+      // 补全位置拼接逻辑（避免多余空格）
+      nLoc = city && region && city !== region 
+        ? `${flag} ${region} ${city}` 
+        : `${flag} ${city || region}` || "—";
       asnInfo = dt.org || "—";
-
-    } catch {}
+    } catch (e) {
+      console.error('落地IP解析失败:', e);
+    }
   }
 
-  // ===== 风险 =====
-  let riskTxt="…", riskCol=C_SUB, riskIcon="clock";
+  // ===================== 完整风险/机房判断（补全所有分支）=====================
+  let riskTxt="未检测", riskCol=C_SUB, riskIcon="clock";
   const data = ipData.status === 'fulfilled' ? ipData.value : {};
 
-  const nativeText = data.isResidential
+  // 完整的住宅/机房标识
+  const nativeText = data.isResidential === true
     ? "🏠 住宅"
     : data.isResidential === false
     ? "🏢 机房"
     : "⟳ 检测中";
-
   const nodeIpWithNative = `${nIp} ${nativeText}`;
 
+  // 补全所有风险等级分支
   const risk = data.fraudScore;
-
   if (risk != null) {
-    if (risk >= 80) { riskTxt=`极高风险 ${risk}`; riskCol=C_RED; riskIcon="xmark.shield.fill"; }
-    else if (risk >= 70) { riskTxt=`高风险 ${risk}`; riskCol=C_ORANGE; riskIcon="exclamationmark.shield.fill"; }
-    else if (risk >= 40) { riskTxt=`中风险 ${risk}`; riskCol=C_YELLOW; riskIcon="exclamationmark.shield.fill"; }
-    else { riskTxt=`纯净 ${risk}`; riskCol=C_GREEN; riskIcon="checkmark.shield.fill"; }
+    if (risk >= 80) { 
+      riskTxt = `极高风险 ${risk}`; 
+      riskCol = C_RED; 
+      riskIcon = "xmark.shield.fill"; 
+    } else if (risk >= 70) { 
+      riskTxt = `高风险 ${risk}`; 
+      riskCol = C_ORANGE; 
+      riskIcon = "exclamationmark.shield.fill"; 
+    } else if (risk >= 40) { 
+      riskTxt = `中风险 ${risk}`; 
+      riskCol = C_YELLOW; 
+      riskIcon = "exclamationmark.shield.fill"; 
+    } else { 
+      riskTxt = `纯净 ${risk}`; 
+      riskCol = C_GREEN; 
+      riskIcon = "checkmark.shield.fill"; 
+    }
   }
 
-  const delayText = costTime > 0 ? `${costTime}ms` : "…";
-  const delayColor = costTime > 300 ? C_RED : costTime > 100 ? C_YELLOW : C_GREEN;
+  // 补全延迟颜色判断逻辑
+  const delayText = costTime > 0 ? `${costTime}ms` : "—";
+  let delayColor = C_SUB;
+  if (costTime > 300) delayColor = C_RED;
+  else if (costTime > 100) delayColor = C_YELLOW;
 
+  // ===================== 完整UI行组件（无省略）=====================
   const Row = (ic, icCol, label, val, valCol) => ({
-    type: 'stack', direction: 'row', alignItems: 'center', padding: [3, 0],
+    type: 'stack', 
+    direction: 'row', 
+    alignItems: 'center', 
+    padding: [3, 0],
     children: [
       { type: 'image', src: `sf-symbol:${ic}`, color: icCol, width: 12, height: 12 },
       { type: 'spacer', length: 5 },
@@ -202,14 +234,25 @@ export default async function(ctx) {
     ]
   });
 
+  // ===================== 最终返回（补全所有配置）=====================
   return {
     type: 'widget',
     padding: [8, 10],
     backgroundColor: BG_CARD,
     cornerRadius: 12,
+    // 补全刷新策略
+    refreshPolicy: { 
+      onNetworkChange: true, 
+      onEnter: true, 
+      timeout: 10,
+      refreshInterval: 30 // 补全自动刷新
+    },
     children: [
       {
-        type: 'stack', direction: 'row', alignItems: 'center',
+        type: 'stack', 
+        direction: 'row', 
+        alignItems: 'center',
+        padding: [2, 0, 4, 0], // 补全内边距
         children: [
           { type: 'image', src: `sf-symbol:${netIcon}`, color: C_BLUE, width:14, height:14 },
           { type: 'spacer', length:5 },
