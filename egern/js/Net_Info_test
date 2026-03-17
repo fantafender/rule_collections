@@ -1,0 +1,216 @@
+/**
+ * 📌 最终鲁棒版 · ASN失败兜底 · 网络差也能用 · 样式不变
+ * ✅ 新增：落地IP/ASN 延后加载 · 高延迟漫游不卡死
+ */
+export default async function(ctx) {
+  const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
+  const C_TEXT  = { light: '#000000', dark: '#FFFFFF' };
+  const C_SUB   = { light: '#6E6E73', dark: '#8E8E93' };
+  const C_BLUE  = { light: '#007AFF', dark: '#0A84FF' };
+  const C_GREEN = { light: '#34C759', dark: '#30D158' };
+  const C_ORANGE= { light: '#FF9500', dark: '#FF9F0A' };
+  const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
+  const C_YELLOW= { light: '#FFCC00', dark: '#FFD60A' };
+
+  // ===================== 【三层兜底】运营商识别 =====================
+  // 第一层：ASN精准识别（优先级最高）
+  function getISPByASN(asn) {
+    const asnCode = (asn || '').trim().replace(/^AS/, '');
+    switch (asnCode) {
+      case '9231': return 'CMHK';
+      case '9381': return 'CTHK';
+      case '4609': return 'CTM';
+      default: return null; // ASN匹配失败返回null，走下一层
+    }
+  }
+
+  // 第二层：ipip原生字段兜底（ASN失败时用）
+  function getISPByIPIP(rawIsp, locArr) {
+    const s = (rawIsp || '').toLowerCase();
+    const area1 = (locArr[1] || '').toLowerCase();
+
+    // 香港/澳门优先修正，绝不显示大陆运营商
+    if (area1.includes('香港')) {
+      if (s.includes('mobile') || s.includes('移动')) return 'CMHK';
+      if (s.includes('telecom') || s.includes('电信')) return 'CTHK';
+      return '香港运营商';
+    }
+    if (area1.includes('澳门')) {
+      return 'CTM';
+    }
+
+    // 大陆运营商
+    if (/(移动|cmcc)/i.test(s)) return '中国移动';
+    if (/(电信|chinanet)/i.test(s)) return '中国电信';
+    if (/(联通|unicom)/i.test(s)) return '中国联通';
+    return '未知运营商';
+  }
+
+  // 第三层：终极兜底（前两层都失败）
+  const DEFAULT_ISP = '未知运营商';
+
+  const cityMap = { tokyo: '东京', osaka: '大阪', kyoto: '京都' };
+  const regionMap = { tokyo: '东京都', osaka: '大阪府' };
+
+  // 预留1.2秒获取网络参数
+  await new Promise(resolve => setTimeout(resolve, 1200));
+
+  const d = ctx.device || {};
+  const isWifi = !!d.wifi?.ssid;
+
+  let netName = "未连接", netIcon = "antenna.radiowaves.left.and.right";
+  if (isWifi) {
+    netName = d.wifi.ssid || "Wi‑Fi";
+    netIcon = "wifi";
+  } else if (d.cellular?.radio) {
+    const radioMap = {
+      "GPRS": "2.5G", "EDGE": "2.75G", "WCDMA": "3G",
+      "LTE": "LTE (4G)", "NR": "5G (SA)", "NRNSA": "5G (NSA)"
+    };
+    const rawRadio = d.cellular.radio?.toUpperCase().replace(/\s+/g, "") || "";
+    netName = `蜂窝: ${radioMap[rawRadio] || rawRadio || "5G"}`;
+  }
+
+  const localIp = d.ipv4?.address || "—";
+
+  // —————————————————— 直连IP + 容错处理 ——————————————————
+  let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "";
+  try {
+    const res = await ctx.http.get('https://myip.ipip.net/json', {
+      headers: { 'User-Agent': 'Mozilla/5.0' }, 
+      timeout: 5000,
+      retry: 1
+    });
+    const body = await res.json();
+    if (body?.data) {
+      pubIp = body.data.ip || "—";
+      const locArr = body.data.location || [];
+      pubLoc = `🇨🇳 ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
+      const rawIspFromIPIP = locArr[4] || locArr[3] || '';
+
+      // 第一步：尝试获取ASN（带超时+重试）
+      try {
+        const asnRes = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { 
+          timeout: 3000,  // ASN接口超时缩短，避免卡太久
+          retry: 1
+        });
+        pubASN = (await asnRes.text()).trim() || '';
+      } catch(e) {
+        console.log('ASN接口获取失败，使用ipip字段兜底');
+      }
+
+      // 第二步：按优先级识别运营商
+      pubIsp = getISPByASN(pubASN)          // 1.ASN优先
+            || getISPByIPIP(rawIspFromIPIP, locArr) // 2.ipip兜底
+            || DEFAULT_ISP;                 // 3.终极兜底
+    }
+  } catch (e) {
+    console.log('ipip接口失败，使用默认值');
+  }
+
+  // ===================== 【关键】落地IP / ASN / 风险 → 延后加载 =====================
+  let nIp = "—", nLoc = "—", asnInfo = "—";
+  let ipData = {}, costTime = 0;
+  let nodeIpWithNative = `${nIp} ⟳ 加载中…`;
+  let riskTxt = "…", riskCol = C_SUB, riskIcon = "clock";
+  const delayText = costTime > 0 ? `${costTime}ms` : "…";
+  const delayColor = costTime > 300 ? C_RED : costTime > 100 ? C_YELLOW : C_GREEN;
+
+  // 异步延后加载：不阻塞渲染，2秒后再请求
+  (async () => {
+    try {
+      // 漫游高延迟环境 → 延后2秒再请求落地信息
+      await new Promise(r => setTimeout(r, 2000));
+
+      // 落地IP
+      try {
+        const res = await ctx.http.get('https://ipinfo.io/json', { 
+          timeout: 6000, // 延后后给更长超时
+          retry: 1
+        });
+        const dt = await res.json();
+        nIp = dt.ip || "—";
+        const code = dt.country || "";
+        const flag = code ? String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) : "🌐";
+        const cityEn = (dt.city || "").toLowerCase();
+        const regionEn = (dt.region || "").toLowerCase();
+        const city = cityMap[cityEn] || dt.city || "";
+        const region = regionMap[regionEn] || dt.region || "";
+        nLoc = city === region ? `${flag} ${city}` : `${flag} ${region} ${city}`;
+        asnInfo = dt.org || "—";
+      } catch(e) {}
+
+      // 风险与延迟
+      try {
+        const start = Date.now();
+        const r = await ctx.http.get('https://my.ippure.com/v1/info', { 
+          timeout: 6000,
+          retry: 1
+        });
+        costTime = Date.now() - start;
+        ipData = await r.json();
+      } catch(e) {}
+
+      const nativeText = ipData.isResidential
+        ? "🏠 住宅" : ipData.isResidential === false ? "🏢 机房" : "⟳ 检测中";
+      nodeIpWithNative = `${nIp} ${nativeText}`;
+
+      const risk = ipData.fraudScore;
+      if (risk != null) {
+        if (risk >= 80) { riskTxt = `极高风险 ${risk}`; riskCol = C_RED; riskIcon = "xmark.shield.fill"; }
+        else if (risk >= 70) { riskTxt = `高风险 ${risk}`; riskCol = C_ORANGE; riskIcon = "exclamationmark.shield.fill"; }
+        else if (risk >= 40) { riskTxt = `中风险 ${risk}`; riskCol = C_YELLOW; riskIcon = "exclamationmark.shield.fill"; }
+        else { riskTxt = `纯净 ${risk}`; riskCol = C_GREEN; riskIcon = "checkmark.shield.fill"; }
+      }
+    } catch(e) {}
+  })();
+
+  // ===================== 保留完美样式 =====================
+  const Row = (ic, icCol, label, val, valCol) => ({
+    type: 'stack', direction: 'row', alignItems: 'center', padding: [3, 0],
+    children: [
+      { type: 'image', src: `sf-symbol:${ic}`, color: icCol, width: 12, height: 12 },
+      { type: 'spacer', length: 5 },
+      { type: 'text', text: label, font: { size: 10 }, textColor: C_SUB },
+      { type: 'spacer' },
+      { type: 'text', 
+        text: val, 
+        font: { size: 10, weight: 'medium' }, 
+        textColor: valCol, 
+        maxLines: 1, 
+        lineBreakMode: 'truncatedTail' 
+      }
+    ]
+  });
+
+  return {
+    type: 'widget',
+    padding: [8, 10],
+    backgroundColor: BG_CARD,
+    cornerRadius: 12,
+    refreshPolicy: { 
+      onNetworkChange: true,
+      onEnter: true,
+      timeout: 10
+    },
+    children: [
+      {
+        type: 'stack', direction: 'row', alignItems: 'center', padding: [2,0,4,0],
+        children: [
+          { type: 'image', src: `sf-symbol:${netIcon}`, color: C_BLUE, width:14, height:14 },
+          { type: 'spacer', length:5 },
+          { type: 'text', text: netName, font: { size:13, weight:'semibold' }, textColor: C_TEXT },
+          { type: 'spacer' },
+          { type: 'text', text: delayText, font: { size:12, weight:'medium' }, textColor: delayColor }
+        ]
+      },
+      Row("iphone", C_GREEN, "内网IP", localIp, C_TEXT),
+      Row("globe", C_BLUE, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT),
+      Row("mappin", C_SUB, "位置", pubLoc, C_TEXT),
+      Row("paperplane.fill", C_BLUE, "落地IP", nodeIpWithNative, C_TEXT),
+      Row("mappin", C_SUB, "落地", nLoc, C_TEXT),
+      Row("number.square.fill", C_SUB, "ASN", asnInfo, C_TEXT),
+      Row(riskIcon, riskCol, "风险", riskTxt, riskCol),
+    ]
+  };
+}
