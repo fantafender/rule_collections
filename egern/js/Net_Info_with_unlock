@@ -1,1 +1,300 @@
+export default async function(ctx) {
+  // ===================== 样式常量（light/dark 双模式）=====================
+  const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
+  const C_TEXT  = { light: '#000000', dark: '#FFFFFF' };
+  const C_SUB   = { light: '#6E6E73', dark: '#8E8E93' };
+  const C_BLUE  = { light: '#007AFF', dark: '#0A84FF' };
+  const C_GREEN = { light: '#34C759', dark: '#30D158' };
+  const C_YELLOW= { light: '#FF9F0A', dark: '#FF9F0A' };
+  const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
 
+  // ===================== 辅助函数：获取系统主题适配的颜色 =====================
+  const getThemeColor = (colorObj) => {
+    const isDarkMode = ctx?.device?.colorScheme === 'dark' || false;
+    return isDarkMode ? colorObj.dark : colorObj.light;
+  };
+
+  // ===================== IP类型判断 =====================
+  function getIPType(isp, org) {
+    const raw = `${isp} ${org}`.toLowerCase();
+    if (raw.includes('residential') || raw.includes('consumer') || raw.includes('home') || 
+        raw.includes('住户') || raw.includes('家庭')) {
+      return "🏠 住宅";
+    }
+    if (raw.includes('datacenter') || raw.includes('hosting') || raw.includes('server') || 
+        raw.includes('机房') || raw.includes('数据中心')) {
+      return "🏢 机房";
+    }
+    if (raw.includes('mobile') || raw.includes('cellular') || raw.includes('移动') || raw.includes('蜂窝')) {
+      return "📶 移动";
+    }
+    return "🌐 固定IP";
+  }
+
+  // ===================== 运营商识别 =====================
+  function getISPByASN(asn) {
+    const asnCode = (asn || "").trim().replace(/^AS/, "");
+    switch (asnCode) {
+      case "9231": return "CMHK";
+      case "9381": return "CTHK";
+      case "4609": return "CTM";
+      default: return null;
+    }
+  }
+
+  function getISPByIPIP(rawIsp, locArr) {
+    const s = (rawIsp || "").toLowerCase();
+    const area1 = (locArr[1] || "").toLowerCase();
+    if (area1.includes("香港")) {
+      if (s.includes("mobile") || s.includes("移动")) return "CMHK";
+      if (s.includes("telecom") || s.includes("电信")) return "CTHK";
+      return "香港运营商";
+    }
+    if (area1.includes("澳门")) return "CTM";
+    if (/(移动|cmcc)/i.test(s)) return "中国移动";
+    if (/(电信|chinanet)/i.test(s)) return "中国电信";
+    if (/(联通|unicom)/i.test(s)) return "中国联通";
+    return "未知运营商";
+  }
+
+  const DEFAULT_ISP = "未知运营商";
+
+  // ===================== 国旗 =====================
+  function getFlagFromIPIP(locArr) {
+    const country = locArr[0] || "";
+    const map = {
+      "中国": "CN", "日本": "JP", "美国": "US", "法国": "FR",
+      "德国": "DE", "新加坡": "SG", "英国": "GB", "韩国": "KR",
+      "加拿大": "CA", "澳大利亚": "AU", "荷兰": "NL"
+    };
+    let code = map[country];
+    if (!code) {
+      if (locArr[1]?.includes("香港")) code = "HK";
+      else if (locArr[1]?.includes("澳门")) code = "MO";
+      else if (locArr[1]?.includes("台湾")) code = "TW";
+    }
+    if (!code) return "🌐";
+    return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt()));
+  }
+
+  // ===================== 基础网络信息 =====================
+  const d = ctx.device || {};
+  const isWifi = !!d.wifi?.ssid;
+  let netName = "未连接", netIcon = "antenna.radiowaves.left.and.right";
+  if (isWifi) {
+    netName = d.wifi.ssid || "Wi‑Fi";
+    netIcon = "wifi";
+  } else if (d.cellular?.radio) {
+    const r = d.cellular.radio.toUpperCase().replace(/\s+/g, "");
+    const map = { "GPRS": "2G", "EDGE": "2G", "WCDMA": "3G", "LTE": "4G", "NR": "5G", "NRNSA": "5G" };
+    netName = `蜂窝: ${map[r] || r || "5G"}`;
+  }
+
+  // ===================== 🔥 核心：流媒体/AI解锁检测（集成你的三段式逻辑）=====================
+  // 1. Netflix 三段式检测（全解锁/半解锁/未解锁）
+  const checkNetflix = async () => {
+    try {
+      // 1.1 尝试访问非自制剧（全解锁检测）
+      const fullRes = await ctx.http.get("https://www.netflix.com/title/80018499", { 
+        timeout: 3500, followRedirect: false 
+      });
+      if (fullRes.status === 200) {
+        const reg = fullRes.headers["x-netflix-originating-env"] || "US";
+        return { name: "奈飞", region: reg.toUpperCase() };
+      }
+      
+      // 1.2 如果全解失败，尝试访问自制剧（半解锁检测）
+      const basicRes = await ctx.http.get("https://www.netflix.com/title/81215567", { timeout: 3500 });
+      if (basicRes.status === 200) {
+        return { name: "奈飞", region: "🍿" }; // 半解锁标识
+      }
+      return { name: "奈飞", region: "❌" };
+    } catch (e) {
+      return { name: "奈飞", region: "❌" };
+    }
+  };
+
+  // 2. 通用解锁检测函数（抽象复用）
+  const checkUnlock = async (name, url, checkFn) => {
+    try {
+      const res = await ctx.http.get(url, { 
+        timeout: 3500, 
+        headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" },
+        followRedirect: false
+      });
+      const checkResult = await checkFn(res);
+      // 如果检测通过，提取地区（优先loc字段）
+      if (checkResult.ok) {
+        const traceText = await res.text().catch(() => "");
+        const locMatch = traceText.match(/loc=(\w+)/);
+        const region = locMatch ? locMatch[1].toUpperCase() : "US";
+        return { name, region };
+      }
+      return { name, region: "❌" };
+    } catch (e) {
+      return { name, region: "❌" };
+    }
+  };
+
+  // 3. 所有解锁检测任务（可扩展）
+  const unlockTasks = [
+    checkUnlock("ChatGPT", "https://chatgpt.com/auth/login", async (res) => ({ ok: res.status === 200 })),
+    checkNetflix(), // 独立Netflix三段式逻辑
+    checkUnlock("TikTok", "https://www.tiktok.com/", async (res) => ({ ok: res.status !== 403 })),
+    checkUnlock("Gemini", "https://gemini.google.com/", async (res) => ({ ok: res.status === 200 && !res.url.includes("error") })),
+    checkUnlock("Disney+", "https://www.disneyplus.com", async (res) => ({ ok: res.status === 200 && !res.url.includes("preview") }))
+  ];
+
+  // ===================== 科学计时：网络延迟检测 =====================
+  const globalStart = Date.now();
+
+  // 网络 RTT（HTTPS 真实延迟）
+  let realTcpDelay = 0;
+  const pingTask = ctx.http.get("https://1.1.1.1/cdn-cgi/trace", { timeout: 2500 })
+    .then(() => { realTcpDelay = Date.now() - globalStart; })
+    .catch(() => { realTcpDelay = 0; });
+
+  // ippure 接口延迟（剔除JSON解析耗时）
+  let ipData = {}, apiResponseTime = 0;
+  const ippureTask = ctx.http.get("https://my.ippure.com/v1/info", { timeout: 5000 })
+    .then(async (res) => {
+      const t0 = Date.now();
+      ipData = await res.json();
+      const parseTime = Date.now() - t0;
+      apiResponseTime = (Date.now() - globalStart) - parseTime;
+    })
+    .catch(() => { apiResponseTime = 0; });
+
+  // IP信息请求
+  const ipipPromise = ctx.http.get("https://myip.ipip.net/json", {
+    headers: { "User-Agent": "Mozilla/5.0" }, timeout: 5000
+  }).catch(() => null);
+
+  const ipinfoPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 })
+    .catch(() => null);
+
+  // ===================== 全并行执行所有任务 =====================
+  // 并行执行：延迟检测 + IP信息 + 解锁检测
+  const [_, __, ipipResRaw, ipinfoResRaw, ...unlockResults] = await Promise.all([
+    pingTask,
+    ippureTask,
+    ipipPromise,
+    ipinfoPromise,
+    ...unlockTasks // 解锁检测任务
+  ]);
+
+  // ===================== 解析IP信息 =====================
+  let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "";
+  if (ipipResRaw) {
+    try {
+      const body = await ipipResRaw.json();
+      if (body?.data) {
+        pubIp = body.data.ip || "—";
+        if (pubIp) {
+          pubASN = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { timeout: 3000 })
+            .then(r => r.text().then(t => t.trim())).catch(() => "");
+        }
+        const locArr = Array.isArray(body.data.location) 
+          ? body.data.location 
+          : (body.data.location || "").split(" ").filter(Boolean);
+        pubIsp = getISPByASN(pubASN) || getISPByIPIP(locArr[4] || locArr[3] || "", locArr) || DEFAULT_ISP;
+        const flag = getFlagFromIPIP(locArr);
+        pubLoc = `${flag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
+      }
+    } catch (e) {}
+  }
+
+  let nIp = "—", nLoc = "—", asnInfo = "—";
+  if (ipinfoResRaw) {
+    try {
+      const dt = await ipinfoResRaw.json();
+      nIp = dt.ip || "—";
+      const code = dt.country || "";
+      const flag = code ? String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) : "🌐";
+      nLoc = `${flag} ${dt.region || ""} ${dt.city || ""}`.trim() || "—";
+      asnInfo = dt.org || "—";
+    } catch (e) {}
+  }
+
+  // ===================== 风险评分（优化版）=====================
+  const risk = ipData.fraudScore;
+  let riskTxt = "检测失败", riskColor = C_SUB; 
+  if (typeof risk === "number") {
+    if (risk < 30) {
+      riskTxt = `极高纯净 (${risk})`;
+      riskColor = C_GREEN;
+    } else if (risk < 60) {
+      riskTxt = `中等风险 (${risk})`;
+      riskColor = C_YELLOW;
+    } else {
+      riskTxt = `高风险警告 (${risk})`;
+      riskColor = C_RED;
+    }
+  }
+
+  const ipType = ipData.isResidential === true ? "🏠 住宅" 
+    : ipData.isResidential === false ? "🏢 机房" 
+    : getIPType(pubIsp, asnInfo);
+
+  // ===================== 延迟颜色（适配暗色模式）=====================
+  let delayColor = C_SUB;
+  if (realTcpDelay > 0) {
+    if (realTcpDelay < 150) delayColor = C_GREEN;
+    else if (realTcpDelay <= 350) delayColor = C_YELLOW;
+    else delayColor = C_RED;
+  } else if (apiResponseTime > 0) {
+    if (apiResponseTime < 150) delayColor = C_GREEN;
+    else if (apiResponseTime <= 350) delayColor = C_YELLOW;
+    else delayColor = C_RED;
+  }
+
+  // ===================== 解锁状态格式化（按要求：平台 地区/❌）=====================
+  const unlockItems = unlockResults.map(item => `${item.name} ${item.region}`);
+  const unlockText = unlockItems.join("，");
+
+  // ===================== 延迟文本 =====================
+  const delayText = realTcpDelay > 0 
+    ? `${realTcpDelay}ms (网络RTT) / ${apiResponseTime || "—"}ms (接口)`
+    : `${apiResponseTime || "—"}ms (接口)`;
+
+  // ===================== UI 组件 =====================
+  const Row = (ic, icCol, label, val, valCol) => ({
+    type: "stack", direction: "row", alignItems: "center", padding: [3, 0],
+    children: [
+      { type: "image", src: `sf-symbol:${ic}`, color: getThemeColor(icCol), width: 12, height: 12 },
+      { type: "spacer", length: 5 },
+      { type: "text", text: label, font: { size: 10 }, textColor: getThemeColor(C_SUB) },
+      { type: "spacer" },
+      { type: "text", text: val, font: { size: 10, weight: "medium" }, textColor: getThemeColor(valCol), maxLines: 1 }
+    ]
+  });
+
+  // ===================== 最终返回（删除内网IP，新增解锁情况）=====================
+  return {
+    type: "widget",
+    padding: [8, 10],
+    backgroundColor: getThemeColor(BG_CARD),
+    cornerRadius: 12,
+    refreshPolicy: { onNetworkChange: true, onEnter: true, timeout: 10 },
+    children: [
+      {
+        type: "stack", direction: "row", alignItems: "center", padding: [2, 0, 4, 0],
+        children: [
+          { type: "image", src: `sf-symbol:${netIcon}`, color: getThemeColor(C_BLUE), width:14, height:14 },
+          { type: "spacer", length:5 },
+          { type: "text", text: netName, font: { size:13, weight:"semibold" }, textColor: getThemeColor(C_TEXT) },
+          { type: "spacer" },
+          { type: "text", text: delayText, font: { size:10, weight:"medium" }, textColor: getThemeColor(delayColor) }
+        ]
+      },
+      Row("globe", C_BLUE, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT),
+      Row("mappin", C_SUB, "位置", pubLoc, C_TEXT),
+      Row("paperplane.fill", C_BLUE, "落地IP", `${nIp} ${ipType}`, C_TEXT),
+      Row("mappin", C_SUB, "落地地区", nLoc, C_TEXT),
+      Row("number.square.fill", C_SUB, "ASN", asnInfo, C_TEXT),
+      Row("shield.fill", riskColor, "风险评分", riskTxt, riskColor),
+      // 新增：解锁情况行（集成你的三段式检测结果）
+      Row("play.rectangle", C_BLUE, "解锁情况", unlockText, C_TEXT)
+    ]
+  };
+}
