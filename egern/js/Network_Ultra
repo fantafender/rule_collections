@@ -86,11 +86,19 @@ export default async function(ctx) {
   if (isWifi) {
     netName = d.wifi.ssid || "Wi‑Fi";
     netIcon = "wifi";
-  } else if (d.cellular?.radio) {
-    const r = d.cellular.radio.toUpperCase().replace(/\s+/g, "");
-    const map = { "GPRS": "2G", "EDGE": "2G", "WCDMA": "3G", "LTE": "4G", "NR": "5G", "NRNSA": "5G" };
-    netName = `蜂窝: ${map[r] || r || "5G"}`;
-  }
+} else if (d.cellular?.radio) {
+  const r = d.cellular.radio.toUpperCase().trim();
+  let netType = "5G";
+  // 这里可以自定义显示文字
+  if (r.includes("NRNSA") || r === "NRNSA") netType = "5G NSA";
+  else if (r.includes("NR") || r === "NR") netType = "5G SA";
+  else if (r === "LTE") netType = "4G LTE";
+  else if (r === "WCDMA") netType = "3G";
+  else if (r === "GPRS" || r === "EDGE") netType = "2G";
+  else netType = r;
+
+  netName = `蜂窝: ${netType}`;
+}
   const localIp = d.ipv4?.address || "—";
 
   // ===================== 🔥 科学计时：独立内部计时 =====================
