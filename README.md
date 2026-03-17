@@ -20,5 +20,7 @@ https://raw.githubusercontent.com/fantafender/rule_collections/refs/heads/main/e
 ## network_ultra 
 增强了全球直连ip运营商显示
 https://raw.githubusercontent.com/fantafender/rule_collections/refs/heads/main/egern/js/network_ultra
+效果如图，实测最多4000ms延迟下能正常显示
+
 <img width="2388" height="1368" alt="image" src="https://github.com/user-attachments/assets/85488143-502f-4243-a415-f93953cd4ae4" />
 
