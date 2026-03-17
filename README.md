@@ -4,7 +4,7 @@
 Adblock_merge/China_Direct/rewrite egern直接添加模块使用
 1. Reject和Direct不涉及分流考量，直接引用最为便捷
 2. 聚合了多个数据源（可能有重复），尽可能做到一步到位
-3.rewrite文件可以不引用（不一定有效）
+3. rewrite文件可以不引用（不一定有效）
 ## Adblock_merge
 https://raw.githubusercontent.com/fantafender/rule_collections/refs/heads/main/egern/Adblock_Merge.yaml
 ## China_Direct
