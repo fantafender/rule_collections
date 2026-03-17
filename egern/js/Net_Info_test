@@ -1,17 +1,16 @@
 /**
- * 📌 最终稳定版 · 并发请求优化 · 提速降超时 · 保留所有成功逻辑
+ * 📌 稳定并行版 · 不丢数据 · 不空白 · 速度快
  */
-export default async function(ctx) {
+export default async function(ctx) => {
   const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
   const C_TEXT  = { light: '#000000', dark: '#FFFFFF' };
   const C_SUB   = { light: '#6E6E73', dark: '#8E8E93' };
-  const C_BLUE  = { light: '#007AFF', dark: '#FF453A' };
+  const C_BLUE  = { light: '#007AFF', dark: '#0A84FF' };
   const C_GREEN = { light: '#34C759', dark: '#30D158' };
   const C_ORANGE= { light: '#FF9500', dark: '#FF9F0A' };
   const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
   const C_YELLOW= { light: '#FFCC00', dark: '#FFD60A' };
 
-  // ===================== 运营商识别（保留原有逻辑）=====================
   function getISPByASN(asn) {
     const asnCode = (asn || '').trim().replace(/^AS/, '');
     switch (asnCode) {
@@ -37,7 +36,6 @@ export default async function(ctx) {
     }
     if (area1.includes('澳门')) return 'CTM';
 
-    // 法国地区识别
     if (area1.includes('法兰西岛') || area1.includes('法国') || area1.includes('巴黎')) {
       if (s.includes('sfr')) return 'SFR';
       if (s.includes('orange')) return 'Orange';
@@ -46,7 +44,6 @@ export default async function(ctx) {
       return '法国运营商';
     }
 
-    // 大陆运营商
     if (/(移动|cmcc)/i.test(s)) return '中国移动';
     if (/(电信|chinanet)/i.test(s)) return '中国电信';
     if (/(联通|unicom)/i.test(s)) return '中国联通';
@@ -57,17 +54,14 @@ export default async function(ctx) {
   const cityMap = { tokyo: '东京', osaka: '大阪', kyoto: '京都' };
   const regionMap = { tokyo: '东京都', osaka: '大阪府' };
 
-  // 缩短基础等待时间（1200ms → 500ms）
-  await new Promise(resolve => setTimeout(resolve, 500));
+  await new Promise(r => setTimeout(r, 300));
 
-  // ===================== 初始化所有变量（保底）=====================
   const d = ctx.device || {};
   let netName = "未连接", netIcon = "antenna.radiowaves.left.and.right";
   const localIp = d.ipv4?.address || "—";
-  
-  // 本地网络信息（优先获取，必显示）
+
   if (d.wifi?.ssid) {
-    netName = d.wifi.ssid || "Wi‑Fi";
+    netName = d.wifi.ssid;
     netIcon = "wifi";
   } else if (d.cellular?.radio) {
     const radioMap = {
@@ -78,64 +72,39 @@ export default async function(ctx) {
     netName = `蜂窝: ${radioMap[rawRadio] || rawRadio || "5G"}`;
   }
 
-  // ===================== 核心：并发请求改造 =====================
+  // ===================== 真正安全的并行请求 =====================
+  const fetchWithCatch = (url, opts) => 
+    ctx.http.get(url, opts).catch(() => ({ json: async () => ({}), text: async () => "" }));
+
+  const task1 = fetchWithCatch('https://myip.ipip.net/json', {
+    headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 4000
+  });
+
+  const task2 = fetchWithCatch('https://ipinfo.io/json', { timeout: 4000 });
+  const task3 = fetchWithCatch('https://my.ippure.com/v1/info', { timeout: 4000 });
+
+  // 一起等所有结果
+  const [resIpip, resIpinfo, resIppure] = await Promise.all([task1, task2, task3]);
+
+  // 直连IP
   let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "";
-  let nIp = "—", nLoc = "—", asnInfo = "—";
-  let ipData = {}, costTime = 0;
-
-  // 1. 先请求直连IP基础信息（ipip）
-  let ipipPromise = ctx.http.get('https://myip.ipip.net/json', {
-    headers: { 'User-Agent': 'Mozilla/5.0' }, 
-    timeout: 4000,
-    retry: 1
-  }).catch(e => {
-    console.log('ipip接口失败:', e.message);
-    return { data: {} };
-  });
-
-  // 2. 并发请求：落地IP + 风险检测（不等待直连IP）
-  let ipinfoPromise = ctx.http.get('https://ipinfo.io/json', { 
-    timeout: 4000,
-    retry: 1
-  }).catch(e => {
-    console.log('ipinfo接口失败:', e.message);
-    return { json: () => ({}) };
-  });
-
-  let ippurePromise = (async () => {
-    const start = Date.now();
-    try {
-      const r = await ctx.http.get('https://my.ippure.com/v1/info', { 
-        timeout: 4000,
-        retry: 1
-      });
-      costTime = Date.now() - start;
-      return await r.json();
-    } catch (e) {
-      console.log('ippure接口失败:', e.message);
-      return {};
-    }
-  })();
-
-  // ===================== 处理直连IP响应 =====================
-  const ipipRes = await ipipPromise;
-  if (ipipRes?.data) {
-    pubIp = ipipRes.data.ip || "—";
-    const locArr = ipipRes.data.location || [];
-    
-    // 并发请求ASN（不阻塞主流程）
-    let asnPromise = pubIp !== "—" ? ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { 
-      timeout: 3000,
-      retry: 1
-    }).then(res => res.text().then(txt => txt.trim())).catch(e => '') : Promise.resolve('');
-    
-    // 先识别运营商（用ipip兜底）
+  const body = await resIpip.json().catch(() => ({}));
+  if (body?.data) {
+    pubIp = body.data.ip || "—";
+    const locArr = body.data.location || [];
     const rawIspFromIPIP = locArr[4] || locArr[3] || '';
-    pubIsp = getISPByIPIP(rawIspFromIPIP, locArr) || DEFAULT_ISP;
 
-    // 同时处理国旗
+    // ASN
+    try {
+      const asnRes = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { timeout: 3000 });
+      pubASN = (await asnRes.text()).trim();
+    } catch {}
+
+    pubIsp = getISPByASN(pubASN) || getISPByIPIP(rawIspFromIPIP, locArr) || DEFAULT_ISP;
+
     let countryFlag = '🇨🇳';
-    if (locArr[1]?.includes('法兰西岛') || locArr[1]?.includes('法国') || pubIsp.includes('法国') || pubIsp === 'SFR' || pubIsp === 'Orange' || pubIsp === 'Free' || pubIsp === 'Bouygues') {
+    if (locArr[1]?.includes('法兰西岛') || locArr[1]?.includes('法国') || 
+        ['SFR','Orange','Free','Bouygues','法国运营商'].includes(pubIsp)) {
       countryFlag = '🇫🇷';
     } else if (locArr[1]?.includes('香港')) {
       countryFlag = '🇭🇰';
@@ -145,20 +114,11 @@ export default async function(ctx) {
       countryFlag = '🌐';
     }
     pubLoc = `${countryFlag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
-
-    // 异步处理ASN（成功后更新运营商，不影响显示）
-    asnPromise.then(asn => {
-      if (asn) {
-        pubASN = asn;
-        const asnIsp = getISPByASN(asn);
-        if (asnIsp) pubIsp = asnIsp; // ASN识别更准，覆盖兜底结果
-      }
-    });
   }
 
-  // ===================== 处理落地IP响应（并发结果）=====================
-  const ipinfoRes = await ipinfoPromise;
-  const dt = await ipinfoRes.json().catch(e => ({}));
+  // 落地IP
+  let nIp = "—", nLoc = "—", asnInfo = "—";
+  const dt = await resIpinfo.json().catch(() => ({}));
   if (dt) {
     nIp = dt.ip || "—";
     const code = dt.country || "";
@@ -171,10 +131,14 @@ export default async function(ctx) {
     asnInfo = dt.org || "—";
   }
 
-  // ===================== 处理风险检测响应（并发结果）=====================
-  ipData = await ippurePromise;
+  // 风险
+  let ipData = {}, costTime = 0;
+  try {
+    const start = Date.now();
+    ipData = await resIppure.json().catch(() => ({}));
+    costTime = Date.now() - start;
+  } catch {}
 
-  // ===================== 组装最终显示数据 =====================
   const nativeText = ipData.isResidential
     ? "🏠 住宅" : ipData.isResidential === false ? "🏢 机房" : "⟳ 检测中";
   const nodeIpWithNative = `${nIp} ${nativeText}`;
@@ -191,17 +155,17 @@ export default async function(ctx) {
   const delayText = costTime > 0 ? `${costTime}ms` : "…";
   const delayColor = costTime > 300 ? C_RED : costTime > 100 ? C_YELLOW : C_GREEN;
 
-  // ===================== 样式渲染（保留原有）=====================
   const Row = (ic, icCol, label, val, valCol) => ({
     type: 'stack', direction: 'row', alignItems: 'center', padding: [3, 0],
     children: [
       { type: 'image', src: `sf-symbol:${ic}`, color: icCol, width: 12, height: 12 },
       { type: 'spacer', length: 5 },
-      { type: 'text', text: label, font: { size: 10, textColor: C_SUB } },
+      { type: 'text', text: label, font: { size: 10 }, textColor: C_SUB },
       { type: 'spacer' },
       { type: 'text', 
         text: val, 
-        font: { size: 10, weight: 'medium', textColor: valCol }, 
+        font: { size: 10, weight: 'medium' }, 
+        textColor: valCol, 
         maxLines: 1, 
         lineBreakMode: 'truncatedTail' 
       }
@@ -213,20 +177,16 @@ export default async function(ctx) {
     padding: [8, 10],
     backgroundColor: BG_CARD,
     cornerRadius: 12,
-    refreshPolicy: { 
-      onNetworkChange: true,
-      onEnter: true,
-      timeout: 10
-    },
+    refreshPolicy: { onNetworkChange: true, onEnter: true, timeout: 10 },
     children: [
       {
         type: 'stack', direction: 'row', alignItems: 'center', padding: [2,0,4,0],
         children: [
           { type: 'image', src: `sf-symbol:${netIcon}`, color: C_BLUE, width:14, height:14 },
           { type: 'spacer', length:5 },
-          { type: 'text', text: netName, font: { size:13, weight:'semibold', textColor: C_TEXT } },
+          { type: 'text', text: netName, font: { size:13, weight:'semibold' }, textColor: C_TEXT },
           { type: 'spacer' },
-          { type: 'text', text: delayText, font: { size:12, weight:'medium', textColor: delayColor } }
+          { type: 'text', text: delayText, font: { size:12, weight:'medium' }, textColor: delayColor }
         ]
       },
       Row("iphone", C_GREEN, "内网IP", localIp, C_TEXT),
