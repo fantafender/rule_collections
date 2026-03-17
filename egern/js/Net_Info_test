@@ -1,5 +1,5 @@
 export default async function(ctx) {
-  // ===================== 样式常量（完全保留）v2 =====================
+  // ===================== 样式常量（light/dark 双模式）=====================
   const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
   const C_TEXT  = { light: '#000000', dark: '#FFFFFF' };
   const C_SUB   = { light: '#6E6E73', dark: '#8E8E93' };
@@ -8,12 +8,41 @@ export default async function(ctx) {
   const C_YELLOW= { light: '#FF9F0A', dark: '#FF9F0A' };
   const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
 
-  // ===================== 辅助函数（完全保留）=====================
+  // ===================== 辅助函数：获取系统主题适配的颜色 =====================
   const getThemeColor = (colorObj) => {
     const isDarkMode = ctx?.device?.colorScheme === 'dark' || false;
     return isDarkMode ? colorObj.dark : colorObj.light;
   };
 
+  // ===================== 核心：运营商格式化函数（精准匹配境内，海外返回原始值）=====================
+  const fmtISP = (isp) => {
+    // 空值兜底
+    if (!isp || isp.trim() === "") return "未知运营商";
+    
+    const rawISP = String(isp).trim();
+    const s = rawISP.toLowerCase();
+    
+    // 核心规则：排除HK/SG/JP/TW/MO等海外标识，再匹配境内运营商
+    // 中国移动：排除hk/sg/jp/tw/mo，匹配移动/mobile/cmcc
+    const chinaMobileReg = /^(?!.*(hk|sg|jp|tw|mo)).*(移动|mobile|cmcc)/i;
+    // 中国电信：排除hk/sg/jp/tw/mo，匹配电信/telecom/chinanet
+    const chinaTelecomReg = /^(?!.*(hk|sg|jp|tw|mo)).*(电信|telecom|chinanet)/i;
+    // 中国联通：排除hk/sg/jp/tw/mo，匹配联通/unicom
+    const chinaUnicomReg = /^(?!.*(hk|sg|jp|tw|mo)).*(联通|unicom)/i;
+    // 中国广电：排除hk/sg/jp/tw/mo，匹配广电/broadcast/cbn
+    const chinaBroadCastReg = /^(?!.*(hk|sg|jp|tw|mo)).*(广电|broadcast|cbn)/i;
+
+    // 按优先级匹配（移动→电信→联通→广电）
+    if (chinaMobileReg.test(rawISP)) return "中国移动";
+    if (chinaTelecomReg.test(rawISP)) return "中国电信";
+    if (chinaUnicomReg.test(rawISP)) return "中国联通";
+    if (chinaBroadCastReg.test(rawISP)) return "中国广电";
+    
+    // 海外运营商/未匹配的情况：返回原始值
+    return rawISP;
+  };
+
+  // ===================== IP类型判断 =====================
   function getIPType(isp, org) {
     const raw = `${isp} ${org}`.toLowerCase();
     if (raw.includes('residential') || raw.includes('consumer') || raw.includes('home') || 
@@ -30,6 +59,7 @@ export default async function(ctx) {
     return "🌐 固定IP";
   }
 
+  // ===================== 保留原有ASN匹配（港澳台专用）=====================
   function getISPByASN(asn) {
     const asnCode = (asn || "").trim().replace(/^AS/, "");
     switch (asnCode) {
@@ -40,23 +70,22 @@ export default async function(ctx) {
     }
   }
 
+  // ===================== 简化IPIP解析：仅提取原始运营商字符串 =====================
   function getISPByIPIP(rawIsp, locArr) {
-    const s = (rawIsp || "").toLowerCase();
+    const s = (rawIsp || "").trim();
     const area1 = (locArr[1] || "").toLowerCase();
-    if (area1.includes("香港")) {
-      if (s.includes("mobile") || s.includes("移动")) return "CMHK";
-      if (s.includes("telecom") || s.includes("电信")) return "CTHK";
-      return "香港运营商";
-    }
+    
+    // 港澳台直接返回专用标识（不经过fmtISP）
+    if (area1.includes("香港")) return "香港运营商";
     if (area1.includes("澳门")) return "CTM";
-    if (/(移动|cmcc)/i.test(s)) return "中国移动";
-    if (/(电信|chinanet)/i.test(s)) return "中国电信";
-    if (/(联通|unicom)/i.test(s)) return "中国联通";
-    return "未知运营商";
+    
+    // 境内返回原始字符串（交给fmtISP处理）
+    return s || "未知运营商";
   }
 
   const DEFAULT_ISP = "未知运营商";
 
+  // ===================== 国旗 =====================
   function getFlagFromIPIP(locArr) {
     const country = locArr[0] || "";
     const map = {
@@ -74,7 +103,7 @@ export default async function(ctx) {
     return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt()));
   }
 
-  // ===================== 基础网络信息（完全保留）=====================
+  // ===================== 基础网络信息 =====================
   const d = ctx.device || {};
   const isWifi = !!d.wifi?.ssid;
   let netName = "未连接", netIcon = "antenna.radiowaves.left.and.right";
@@ -90,114 +119,86 @@ export default async function(ctx) {
     else if (r === "WCDMA") netType = "3G";
     else if (r === "GPRS" || r === "EDGE") netType = "2G";
     else netType = r;
+
     netName = `蜂窝: ${netType}`;
   }
   const localIp = d.ipv4?.address || "—";
 
-// ===================== 🔥 科学计时：独立内部计时 =====================
-const globalStart = Date.now();
+  // ===================== 🔥 科学计时：独立内部计时 =====================
+  const globalStart = Date.now();
 
-// 1. 网络 RTT（用 http 而非 https，避免证书错误）
-let realTcpDelay = 0;
-const pingTask = ctx.http.get("http://1.1.1.1/cdn-cgi/trace", { timeout: 2500 })
-  .then(() => { realTcpDelay = Date.now() - globalStart; })
-  .catch(() => { realTcpDelay = 0; });
+  // 1. 网络 RTT（HTTPS 真实延迟）
+  let realTcpDelay = 0;
+  const pingTask = ctx.http.get("https://1.1.1.1/cdn-cgi/trace", { timeout: 2500 })
+    .then(() => { realTcpDelay = Date.now() - globalStart; })
+    .catch(() => { realTcpDelay = 0; });
 
-// 2. 接口延迟
-let ipData = {}, apiResponseTime = 0;
-const ippureTask = ctx.http.get("https://my.ippure.com/v1/info", { timeout: 5000 })
-  .then(async (res) => {
-    const t0 = Date.now();
-    ipData = await res.json();
-    const parseTime = Date.now() - t0;
-    apiResponseTime = (Date.now() - globalStart) - parseTime;
-  })
-  .catch(() => { apiResponseTime = 0; });
+  // 2. 接口延迟（剔除 JSON 解析）
+  let ipData = {}, apiResponseTime = 0;
+  const ippureTask = ctx.http.get("https://my.ippure.com/v1/info", { timeout: 5000 })
+    .then(async (res) => {
+      const t0 = Date.now();
+      ipData = await res.json();
+      const parseTime = Date.now() - t0;
+      apiResponseTime = (Date.now() - globalStart) - parseTime;
+    })
+    .catch(() => { apiResponseTime = 0; });
 
-// ===================== 【关键：全部用 http，不走 https，解决证书错误】 =====================
-// 直连IP（http 版本，绝对不会因为证书失败）
-const directIpPromise = ctx.http.get("http://api.ipify.org?format=json", {
-  timeout: 4000
-}).catch(() => null);
+  // 3. 其他信息
+  const ipipPromise = ctx.http.get("https://myip.ipip.net/json", {
+    headers: { "User-Agent": "Mozilla/5.0" }, timeout: 5000
+  }).catch(() => null);
 
-// 落地IP（走代理）
-const ipinfoPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 })
-  .catch(() => null);
+  const ipinfoPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 })
+    .catch(() => null);
 
-// ipip 用 http
-const ipipPromise = ctx.http.get("http://myip.ipip.net/json", {
-  headers: { "User-Agent": "Mozilla/5.0" }, timeout: 5000
-}).catch(() => null);
+  // 并行执行
+  const [_, __, ipipResRaw, ipinfoResRaw] = await Promise.all([
+    pingTask,
+    ippureTask,
+    ipipPromise,
+    ipinfoPromise
+  ]);
 
-// 并行执行
-const [_, __, directIpRes, ipinfoResRaw, ipipResRaw] = await Promise.all([
-  pingTask,
-  ippureTask,
-  directIpPromise,
-  ipinfoPromise,
-  ipipPromise
-]);
-
-  // ===================== 解析 IP（增强容错）=====================
-  // 解析直连IP（优先用api.ipify，失败则用ipip兜底）
+  // ===================== 解析 IP（核心改造：接入fmtISP）=====================
   let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "";
-  
-  // 第一步：尝试从api.ipify获取直连IP
-  if (directIpRes) {
-    try {
-      const directData = await directIpRes.json().catch(() => ({}));
-      pubIp = directData.ip || pubIp;
-    } catch (e) {
-      console.log("解析直连IP失败: ", e);
-    }
-  }
-
-  // 第二步：用ipip补充直连IP的运营商/位置，或兜底IP
   if (ipipResRaw) {
     try {
-      const body = await ipipResRaw.json().catch(() => ({}));
+      const body = await ipipResRaw.json();
       if (body?.data) {
-        // 如果api.ipify没拿到IP，用ipip的IP兜底
-        if (pubIp === "—") pubIp = body.data.ip || "—";
-        
-        // 获取ASN（强制直连）
-        if (pubIp !== "—") {
-          pubASN = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { 
-            timeout: 3000,
-            policy: "DIRECT" // 强制直连获取ASN
-          })
-          .then(r => r.text().then(t => t.trim())).catch(() => "");
+        pubIp = body.data.ip || "—";
+        if (pubIp) {
+          pubASN = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { timeout: 3000 })
+            .then(r => r.text().then(t => t.trim())).catch(() => "");
         }
-
-        // 解析运营商和位置
         const locArr = Array.isArray(body.data.location) 
           ? body.data.location 
           : (body.data.location || "").split(" ").filter(Boolean);
-        pubIsp = getISPByASN(pubASN) || getISPByIPIP(locArr[4] || locArr[3] || "", locArr) || DEFAULT_ISP;
+        
+        // 核心改造：先获取原始运营商，再通过fmtISP格式化
+        const rawIsp = getISPByASN(pubASN) || getISPByIPIP(locArr[4] || locArr[3] || "", locArr) || DEFAULT_ISP;
+        // 用fmtISP格式化：境内匹配正则，海外返回原始值
+        pubIsp = fmtISP(rawIsp);
+
         const flag = getFlagFromIPIP(locArr);
         pubLoc = `${flag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
       }
-    } catch (e) {
-      console.log("解析ipip数据失败: ", e);
-    }
+    } catch (e) {}
   }
 
-  // 解析落地IP（走代理）
   let nIp = "—", nLoc = "—", asnInfo = "—";
-  if (landingIpRes) {
+  if (ipinfoResRaw) {
     try {
-      const dt = await landingIpRes.json().catch(() => ({}));
+      const dt = await ipinfoResRaw.json();
       nIp = dt.ip || "—";
       const code = dt.country || "";
       const flag = code ? String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) : "🌐";
       nLoc = `${flag} ${dt.region || ""} ${dt.city || ""}`.trim() || "—";
       asnInfo = dt.org || "—";
-    } catch (e) {
-      console.log("解析落地IP失败: ", e);
-    }
+    } catch (e) {}
   }
 
-  // ===================== 风险评分（完全保留）=====================
+  // ===================== 风险评分 =====================
   const risk = ipData.fraudScore;
   let riskTxt = "检测失败", riskColor = C_SUB; 
   if (typeof risk === "number") {
@@ -217,7 +218,7 @@ const [_, __, directIpRes, ipinfoResRaw, ipipResRaw] = await Promise.all([
     : ipData.isResidential === false ? "🏢 机房" 
     : getIPType(pubIsp, asnInfo);
 
-  // ===================== 延迟颜色（完全保留）=====================
+  // ===================== 延迟颜色 =====================
   let delayColor = C_SUB;
   if (realTcpDelay > 0) {
     if (realTcpDelay < 150) delayColor = C_GREEN;
@@ -229,12 +230,12 @@ const [_, __, directIpRes, ipinfoResRaw, ipipResRaw] = await Promise.all([
     else delayColor = C_RED;
   }
 
-  // ===================== 延迟文本（完全保留）=====================
+  // ===================== 延迟文本 =====================
   const delayText = realTcpDelay > 0 
     ? `${realTcpDelay}ms (网络RTT) / ${apiResponseTime || "—"}ms (接口)`
     : `${apiResponseTime || "—"}ms (接口)`;
 
-  // ===================== UI 组件（完全保留）=====================
+  // ===================== UI 组件 =====================
   const Row = (ic, icCol, label, val, valCol) => ({
     type: "stack", direction: "row", alignItems: "center", padding: [3, 0],
     children: [
@@ -246,7 +247,7 @@ const [_, __, directIpRes, ipinfoResRaw, ipipResRaw] = await Promise.all([
     ]
   });
 
-  // ===================== 最终返回（完全保留）=====================
+  // ===================== 最终返回 =====================
   return {
     type: "widget",
     padding: [8, 10],
