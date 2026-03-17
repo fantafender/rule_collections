@@ -1,5 +1,5 @@
 /**
- * 📌 最终完整版 · 精准显示 · 不超时 · 保留所有信息
+ * 📌 最终稳定版 · 保留所有成功逻辑 · 修复法国国旗 · 补充法国运营商识别
  */
 export default async function(ctx) {
   const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
@@ -11,52 +11,24 @@ export default async function(ctx) {
   const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
   const C_YELLOW= { light: '#FFCC00', dark: '#FFD60A' };
 
-  // ===================== 【四层兜底】运营商识别（新增海外）=====================
-  // 第一层：ASN精准识别（优先级最高）
+  // ===================== 【三层兜底】运营商识别（补充法国运营商）=====================
+  // 第一层：ASN精准识别（优先级最高，新增法国ASN）
   function getISPByASN(asn) {
     const asnCode = (asn || '').trim().replace(/^AS/, '');
-    // 香港/澳门
     switch (asnCode) {
       case '9231': return 'CMHK';
       case '9381': return 'CTHK';
       case '4609': return 'CTM';
-      // 日本
-      case '2497': return 'NTT';
-      case '2516': return 'KDDI';
-      case '9605': return 'au';
-      case '17511': return 'SoftBank';
-      // 法国
+      // 新增法国运营商ASN
       case '15557': return 'SFR';
       case '12322': return 'Free';
       case '3215': return 'Orange';
       case '5410': return 'Bouygues';
-      // 马来西亚
-      case '18101': return 'Celcom';
-      case '4788': return 'Digi';
-      case '4787': return 'Maxis';
       default: return null; // ASN匹配失败返回null，走下一层
     }
   }
 
-  // 第二层：ASN原始名称兜底（海外通用）
-  function getISPByASNName(asnName) {
-    if (!asnName) return null;
-    const s = asnName.toLowerCase();
-    // 补充文字匹配（兼容无ASN编号的情况）
-    if (s.includes('ntt')) return 'NTT';
-    if (s.includes('kddi') || s.includes('au')) return 'KDDI/au';
-    if (s.includes('softbank')) return 'SoftBank';
-    if (s.includes('sfr')) return 'SFR';
-    if (s.includes('free')) return 'Free';
-    if (s.includes('orange')) return 'Orange';
-    if (s.includes('bouygues')) return 'Bouygues';
-    if (s.includes('celcom')) return 'Celcom';
-    if (s.includes('digi')) return 'Digi';
-    if (s.includes('maxis')) return 'Maxis';
-    return null;
-  }
-
-  // 第三层：ipip原生字段兜底（ASN失败时用）
+  // 第二层：ipip原生字段兜底（ASN失败时用，新增法国地区判断）
   function getISPByIPIP(rawIsp, locArr) {
     const s = (rawIsp || '').toLowerCase();
     const area1 = (locArr[1] || '').toLowerCase();
@@ -71,24 +43,30 @@ export default async function(ctx) {
       return 'CTM';
     }
 
+    // 新增：法国地区运营商识别
+    if (area1.includes('法兰西岛') || area1.includes('法国') || area1.includes('巴黎')) {
+      if (s.includes('sfr')) return 'SFR';
+      if (s.includes('orange')) return 'Orange';
+      if (s.includes('free')) return 'Free';
+      if (s.includes('bouygues')) return 'Bouygues';
+      return '法国运营商';
+    }
+
     // 大陆运营商
     if (/(移动|cmcc)/i.test(s)) return '中国移动';
     if (/(电信|chinanet)/i.test(s)) return '中国电信';
     if (/(联通|unicom)/i.test(s)) return '中国联通';
-    
-    // 海外地区兜底（ipip返回的原始名称）
-    return rawIsp || '未知运营商';
+    return '未知运营商';
   }
 
-  // 第四层：终极兜底（前三层都失败）
+  // 第三层：终极兜底（前两层都失败）
   const DEFAULT_ISP = '未知运营商';
 
   const cityMap = { tokyo: '东京', osaka: '大阪', kyoto: '京都' };
   const regionMap = { tokyo: '东京都', osaka: '大阪府' };
 
-  // ===================== 优化：并行请求 + 缩短等待 =====================
-  // 等待时间从1200ms → 800ms（足够且不卡）
-  await new Promise(resolve => setTimeout(resolve, 800));
+  // 预留1.2秒获取网络参数
+  await new Promise(resolve => setTimeout(resolve, 1200));
 
   const d = ctx.device || {};
   const isWifi = !!d.wifi?.ssid;
@@ -108,71 +86,60 @@ export default async function(ctx) {
 
   const localIp = d.ipv4?.address || "—";
 
-  // —————————————————— 直连IP + 容错处理（核心修复）——————————————————
-  let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "", pubASNName = "";
+  // —————————————————— 直连IP + 容错处理（核心修复：法国国旗）——————————————————
+  let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "";
   try {
-    // 1. 获取直连IP基础信息（ipip）
     const res = await ctx.http.get('https://myip.ipip.net/json', {
       headers: { 'User-Agent': 'Mozilla/5.0' }, 
-      timeout: 4000,  // 超时从5000→4000，减少等待
+      timeout: 5000,
       retry: 1
     });
     const body = await res.json();
     if (body?.data) {
       pubIp = body.data.ip || "—";
       const locArr = body.data.location || [];
-      // 修复位置显示（兼容海外）
-      pubLoc = `${locArr[0] === '中国' ? '🇨🇳' : '🌐'} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
       const rawIspFromIPIP = locArr[4] || locArr[3] || '';
 
-      // 2. 并行获取ASN（带超时+重试，不阻塞）
-      let asnPromise = Promise.resolve('');
-      if (pubIp !== "—") {
-        asnPromise = ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { 
-          timeout: 2000,  // ASN超时从3000→2000，避免卡太久
+      // 第一步：尝试获取ASN（带超时+重试）
+      try {
+        const asnRes = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { 
+          timeout: 3000,  // ASN接口超时缩短，避免卡太久
           retry: 1
-        }).then(res => res.text().then(txt => txt.trim())).catch(e => '');
-      }
-      // 同时获取ASN名称（补充海外识别）
-      let asnNamePromise = Promise.resolve('');
-      if (pubIp !== "—") {
-        asnNamePromise = ctx.http.get(`https://ipapi.co/${pubIp}/org/`, { 
-          timeout: 2000,
-          retry: 1
-        }).then(res => res.text().then(txt => txt.trim())).catch(e => '');
+        });
+        pubASN = (await asnRes.text()).trim() || '';
+      } catch(e) {
+        console.log('ASN接口获取失败，使用ipip字段兜底');
       }
 
-      // 3. 等待ASN结果（最多等2秒，超时直接走兜底）
-      pubASN = await Promise.race([
-        asnPromise,
-        new Promise(resolve => setTimeout(() => resolve(''), 2000))
-      ]);
-      pubASNName = await Promise.race([
-        asnNamePromise,
-        new Promise(resolve => setTimeout(() => resolve(''), 2000))
-      ]);
+      // 第二步：按优先级识别运营商
+      pubIsp = getISPByASN(pubASN)          // 1.ASN优先
+            || getISPByIPIP(rawIspFromIPIP, locArr) // 2.ipip兜底
+            || DEFAULT_ISP;                 // 3.终极兜底
 
-      // 4. 按优先级识别运营商（核心：新增ASN名称匹配）
-      pubIsp = getISPByASN(pubASN)          // 1.ASN编号优先
-            || getISPByASNName(pubASNName)  // 2.ASN名称兜底（海外）
-            || getISPByIPIP(rawIspFromIPIP, locArr) // 3.ipip兜底
-            || DEFAULT_ISP;                 // 4.终极兜底
+      // 核心修复：根据地区/运营商判断国旗（替换原固定🇨🇳）
+      let countryFlag = '🇨🇳';
+      if (locArr[1]?.includes('法兰西岛') || locArr[1]?.includes('法国') || pubIsp === 'SFR' || pubIsp === 'Orange' || pubIsp === 'Free' || pubIsp === 'Bouygues' || pubIsp === '法国运营商') {
+        countryFlag = '🇫🇷';
+      } else if (locArr[1]?.includes('香港')) {
+        countryFlag = '🇭🇰';
+      } else if (locArr[1]?.includes('澳门')) {
+        countryFlag = '🇲🇴';
+      } else if (locArr[0] !== '中国') {
+        countryFlag = '🌐'; // 非中国/法国地区显示通用国旗
+      }
+      pubLoc = `${countryFlag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
     }
   } catch (e) {
-    console.log('ipip接口失败，使用默认值:', e.message);
+    console.log('ipip接口失败，使用默认值');
   }
 
-  // —————————————————— 落地IP（独立请求，不影响直连IP）——————————————————
+  // —————————————————— 落地IP（保留原有逻辑，正确显示德国国旗）——————————————————
   let nIp = "—", nLoc = "—", asnInfo = "—";
   try {
-    // 并行请求+超时保护
-    const res = await Promise.race([
-      ctx.http.get('https://ipinfo.io/json', { 
-        timeout: 4000,
-        retry: 1
-      }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000))
-    ]);
+    const res = await ctx.http.get('https://ipinfo.io/json', { 
+      timeout: 5000,
+      retry: 1
+    });
     const dt = await res.json();
     nIp = dt.ip || "—";
     const code = dt.country || "";
@@ -183,27 +150,19 @@ export default async function(ctx) {
     const region = regionMap[regionEn] || dt.region || "";
     nLoc = city === region ? `${flag} ${city}` : `${flag} ${region} ${city}`;
     asnInfo = dt.org || "—";
-  } catch (e) {
-    console.log('ipinfo接口失败:', e.message);
-  }
+  } catch (e) {}
 
-  // —————————————————— 风险与延迟（超时保护）——————————————————
+  // —————————————————— 风险与延迟（保留原有逻辑）——————————————————
   let ipData = {}, costTime = 0;
   try {
     const start = Date.now();
-    // 并行请求+超时保护
-    const r = await Promise.race([
-      ctx.http.get('https://my.ippure.com/v1/info', { 
-        timeout: 4000,
-        retry: 1
-      }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000))
-    ]);
+    const r = await ctx.http.get('https://my.ippure.com/v1/info', { 
+      timeout: 5000,
+      retry: 1
+    });
     costTime = Date.now() - start;
     ipData = await r.json();
-  } catch (e) {
-    console.log('ippure接口失败:', e.message);
-  }
+  } catch (e) {}
 
   const nativeText = ipData.isResidential
     ? "🏠 住宅" : ipData.isResidential === false ? "🏢 机房" : "⟳ 检测中";
@@ -261,7 +220,6 @@ export default async function(ctx) {
         ]
       },
       Row("iphone", C_GREEN, "内网IP", localIp, C_TEXT),
-      // 直连IP：用自身ASN+名称识别，精准显示
       Row("globe", C_BLUE, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT),
       Row("mappin", C_SUB, "位置", pubLoc, C_TEXT),
       Row("paperplane.fill", C_BLUE, "落地IP", nodeIpWithNative, C_TEXT),
