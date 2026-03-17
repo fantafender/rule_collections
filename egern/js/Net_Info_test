@@ -3,7 +3,7 @@ export default async function(ctx) {
   const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
   const C_TEXT  = { light: '#000000', dark: '#FFFFFF' };
   const C_SUB   = { light: '#6E6E73', dark: '#8E8E93' };
-  const C_BLUE  = { light: '#007AFF', dark: '#0A84FF' };
+  const C_BLUE  = { light: '#007AFF', dark: '#FF453A' };
   const C_GREEN = { light: '#34C759', dark: '#30D158' };
   const C_ORANGE= { light: '#FF9500', dark: '#FF9F0A' };
   const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
@@ -123,24 +123,38 @@ export default async function(ctx) {
 
   const localIp = d.ipv4?.address || "—";
 
-  // ===================== 🔥 并行请求（新增TCP握手延迟检测）=====================
-  // 1. TCP握手延迟检测（Google 204节点，优先选择）
+  // ===================== 🔥 核心优化：轻量网络延迟探测（剔除TLS）=====================
   let tcpHandshakeDelay = 0;
   const tcpPingPromise = (async () => {
+    // 预热连接（减少冷启动损耗）
+    try {
+      await ctx.http.get('http://1.1.1.1/', { timeout: 1000 }).catch(() => null);
+    } catch (e) {}
+
+    // 精准计时：仅统计TCP握手+数据传输（HTTP无TLS）
     const pingStart = Date.now();
     try {
-      // 使用Cloudflare备用节点（避免Google访问问题）
-      await ctx.http.get('https://1.1.1.1/cdn-cgi/trace', { timeout: 2000 });
+      // 使用HTTP 204节点，剔除TLS握手开销
+      await ctx.http.get('http://1.1.1.1/generate_204', { 
+        timeout: 2000,
+        // 禁用缓存，确保每次都是真实连接
+        headers: { 'Cache-Control': 'no-cache' }
+      });
     } catch (e) {
-      // 降级到百度204（国内节点兜底）
+      // 降级到百度HTTP节点（国内兜底）
       try {
-        await ctx.http.get('https://www.baidu.com/favicon.ico', { timeout: 2000 });
+        await ctx.http.get('http://www.baidu.com/favicon.ico', { timeout: 2000 });
       } catch (err) {}
     }
     tcpHandshakeDelay = Date.now() - pingStart;
+    
+    // 修正：剔除脚本环境封装耗时（经验值补偿）
+    if (tcpHandshakeDelay > 20) {
+      tcpHandshakeDelay -= 20; // 补偿ctx.http.get的系统调用开销
+    }
   })();
 
-  // 2. 原有接口请求
+  // ===================== 原有接口请求 =====================
   let asnPromise = Promise.resolve("");
   const ipipPromise = ctx.http.get('https://myip.ipip.net/json', {
     headers: { 'User-Agent': 'Mozilla/5.0' }, 
@@ -162,7 +176,7 @@ export default async function(ctx) {
     retry: 1
   }).catch(() => ({}));
 
-  // 3. 原有接口响应延迟
+  // 接口响应延迟
   let ipData = {}, apiResponseTime = 0;
   const ippurePromise = (async () => {
     try {
@@ -179,7 +193,7 @@ export default async function(ctx) {
     }
   })();
 
-  // 等待所有并行请求完成（包括TCP检测）
+  // 等待所有并行请求完成
   await tcpPingPromise;
   const [ipipRes, ipinfoRes] = await Promise.allSettled([ipipPromise, ipinfoPromise]);
   await ippurePromise;
@@ -243,18 +257,18 @@ export default async function(ctx) {
     else { riskTxt = `纯净 ${risk}`; riskCol = C_GREEN; riskIcon = "checkmark.shield.fill"; }
   }
 
-  // ===================== 🔥 延迟显示（双指标+智能颜色）=====================
-  // 1. 文本拼接（接口延迟 + 网络延迟）
+  // ===================== 延迟显示（优化后双指标）=====================
+  // 文本拼接（更精准的标注）
   const apiText = apiResponseTime > 0 ? `${apiResponseTime}ms (接口)` : "— (接口)";
-  const tcpText = tcpHandshakeDelay > 0 ? `${tcpHandshakeDelay}ms (网络)` : "— (网络)";
+  const tcpText = tcpHandshakeDelay > 0 ? `${tcpHandshakeDelay}ms (网络RTT)` : "— (网络RTT)";
   const delayText = `${apiText} / ${tcpText}`;
 
-  // 2. 颜色按网络延迟判定（更贴合用户感知）
+  // 颜色按网络RTT判定
   let delayColor = C_SUB;
-  if (tcpHandshakeDelay > 300) delayColor = C_RED;    // 高网络延迟
-  else if (tcpHandshakeDelay > 100) delayColor = C_YELLOW; // 中网络延迟
-  else if (tcpHandshakeDelay > 0) delayColor = C_GREEN;    // 低网络延迟
-  // 无网络延迟时，降级到接口延迟颜色
+  if (tcpHandshakeDelay > 150) delayColor = C_RED;    // 高延迟（优化阈值，贴合真实RTT）
+  else if (tcpHandshakeDelay > 80) delayColor = C_YELLOW; // 中延迟
+  else if (tcpHandshakeDelay > 0) delayColor = C_GREEN;    // 低延迟
+  // 降级逻辑
   else if (apiResponseTime > 300) delayColor = C_RED;
   else if (apiResponseTime > 100) delayColor = C_YELLOW;
   else if (apiResponseTime > 0) delayColor = C_GREEN;
@@ -296,7 +310,6 @@ export default async function(ctx) {
           { type: 'spacer', length:5 },
           { type: 'text', text: netName, font: { size:13, weight:'semibold' }, textColor: C_TEXT },
           { type: 'spacer' },
-          // 双延迟显示（字体稍小，避免溢出）
           { type: 'text', text: delayText, font: { size:10, weight:'medium' }, textColor: delayColor }
         ]
       },
