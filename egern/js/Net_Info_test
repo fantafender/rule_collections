@@ -156,33 +156,37 @@ export default async function(ctx) {
     }
   };
 
-  const checkUnlock = async (name, url, judge) => {
-    try {
-      const res = await ctx.http.get(url, {
-        timeout: 3500,
-        headers: { "User-Agent": "Mozilla/5.0" },
-        followRedirect: false
-      });
-      const ok = await judge(res);
-      if (!ok) return { name, region: "❌" };
-
-      const txt = await res.text().catch(() => "");
-      const m = txt.match(/loc=([A-Za-z]{2})/);
-      const region = m ? m[1].toUpperCase() : countryCode;
-      return { name, region };
-    } catch (e) {
-      return { name, region: "❌" };
-    }
-  };
+const checkUnlock = async (name, url, judge) => {
+  try {
+    const res = await ctx.http.get(url, {
+      timeout: 3500,
+      headers: { "User-Agent": "Mozilla/5.0" },
+      followRedirect: false
+    });
+    const result = await judge(res);
+    if (!result.ok) return { name, region: "❌" };
+    return { name, region: result.region || countryCode };
+  } catch (e) {
+    return { name, region: "❌" };
+  }
+};
 
   // ===================== ✅ 修复：GPT 解锁判断（真实可用）=====================
-  const unlockTasks = [
-    checkUnlock("GPT", "https://chatgpt.com/cdn-cgi/trace", async (r) => r.status === 200),
-    checkNetflix(),
-    checkUnlock("TkTk", "https://www.tiktok.com/", r => r.status !== 403),
-    checkUnlock("Gemini", "https://gemini.google.com/", r => r.status === 200 && !r.url.includes("error")),
-    checkUnlock("Disney", "https://disneyplus.com", r => r.status === 200 && !r.url.includes("preview"))
-  ];
+const unlockTasks = [
+  checkUnlock("GPT", "https://chatgpt.com/cdn-cgi/trace", async (r) => {
+    const ok = r.status === 200;
+    if (ok) {
+      const txt = await r.text().catch(() => "");
+      const m = txt.match(/loc=([A-Za-z]{2})/);
+      return { ok: true, region: m ? m[1].toUpperCase() : countryCode };
+    }
+    return { ok: false };
+  }),
+  checkNetflix(),
+  checkUnlock("TkTk", "https://www.tiktok.com/", r => ({ ok: r.status !== 403 })),
+  checkUnlock("Gemini", "https://gemini.google.com/", r => ({ ok: r.status === 200 && !r.url.includes("error") })),
+  checkUnlock("Disney", "https://disneyplus.com", r => ({ ok: r.status === 200 && !r.url.includes("preview") }))
+];
 
   const unlockResults = await Promise.all(unlockTasks);
 
