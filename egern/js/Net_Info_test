@@ -7,7 +7,7 @@ export default async function(ctx) {
   const C_GREEN = { light: '#34C759', dark: '#30D158' };
   const C_ORANGE= { light: '#FF9500', dark: '#FF9F0A' };
   const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
-  const C_YELLOW= { '#FFCC00', dark: '#FFD60A' };
+ const C_YELLOW = { light: '#FFCC00', dark: '#FFD60A' };
 
   // ===================== IP类型判断 =====================
   function getIPType(isp, org) {
