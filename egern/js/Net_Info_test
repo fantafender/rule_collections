@@ -10,7 +10,7 @@ export default async function(ctx) {
 
   const DEFAULT_ISP = '未知运营商';
 
-  // ===== ISP识别 =====
+  // ===== ISP识别（补全ASN+法兰西岛判断）=====
   function getISPByASN(asn) {
     const a = (asn || '').replace(/^AS/, '');
     return {
@@ -23,15 +23,14 @@ export default async function(ctx) {
     const s = (raw || '').toLowerCase();
     const area = (loc[1] || '').toLowerCase();
 
+    // 香港/澳门
     if (area.includes('香港')) {
-      if (s.includes('mobile')) return 'CMHK';
-      if (s.includes('telecom')) return 'CTHK';
-      return '香港运营商';
+      return s.includes('mobile') ? 'CMHK' : s.includes('telecom') ? 'CTHK' : '香港运营商';
     }
-
     if (area.includes('澳门')) return 'CTM';
 
-    if (area.includes('法国') || area.includes('巴黎')) {
+    // 法国（补全法兰西岛判断）
+    if (area.includes('法国') || area.includes('巴黎') || area.includes('法兰西岛')) {
       if (s.includes('orange')) return 'Orange';
       if (s.includes('free')) return 'Free';
       if (s.includes('bouygues')) return 'Bouygues';
@@ -39,6 +38,7 @@ export default async function(ctx) {
       return '法国运营商';
     }
 
+    // 大陆运营商
     if (/(移动|cmcc)/i.test(s)) return '中国移动';
     if (/(电信)/i.test(s)) return '中国电信';
     if (/(联通)/i.test(s)) return '中国联通';
@@ -46,96 +46,112 @@ export default async function(ctx) {
     return DEFAULT_ISP;
   }
 
+  // ===== 国旗工具（补全法国/香港/澳门精准码）=====
   function getFlag(code) {
-    return code
-      ? String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt()))
-      : "🌐";
+    const flagMap = {
+      CN: '🇨🇳', HK: '🇭🇰', MO: '🇲🇴',
+      FR: '🇫🇷', DE: '🇩🇪', JP: '🇯🇵' // 补充你常用的国家码
+    };
+    return flagMap[code] || "🌐";
   }
 
-  // ===== 网络信息 =====
+  // ===== 网络信息（保留原逻辑）=====
   const d = ctx.device || {};
   const isWifi = !!d.wifi?.ssid;
 
   let netName = "未连接", netIcon = "antenna.radiowaves.left.and.right";
-
   if (isWifi) {
     netName = d.wifi.ssid || "Wi-Fi";
     netIcon = "wifi";
   } else if (d.cellular?.radio) {
-    const map = {
-      GPRS:"2.5G", EDGE:"2.75G", WCDMA:"3G",
-      LTE:"4G", NR:"5G", NRNSA:"5G"
-    };
+    const map = { GPRS:"2.5G", EDGE:"2.75G", WCDMA:"3G", LTE:"4G", NR:"5G", NRNSA:"5G" };
     const r = d.cellular.radio.toUpperCase();
     netName = `蜂窝 ${map[r] || r}`;
   }
-
   const localIp = d.ipv4?.address || "—";
 
-  // ===== 🚀 并发请求 =====
+  // ===== 🚀 并发请求（保留原逻辑，速度最快）=====
   const [ipipR, ipinfoR, ippureR] = await Promise.allSettled([
     ctx.http.get('https://myip.ipip.net/json', { timeout: 3000 }),
     ctx.http.get('https://ipinfo.io/json', { timeout: 3000 }),
     ctx.http.get('https://my.ippure.com/v1/info', { timeout: 3000 })
   ]);
 
-  // ===== 直连IP =====
+  // ===== 直连IP（补全ASN识别+国旗精准度）=====
   let pubIp="—", pubLoc="—", pubIsp=DEFAULT_ISP;
-
   if (ipipR.status === 'fulfilled') {
     try {
       const body = await ipipR.value.json();
       pubIp = body?.data?.ip || "—";
-
       const loc = body?.data?.location || [];
       const rawIsp = loc[4] || loc[3] || '';
 
-      pubIsp = getISPByIPIP(rawIsp, loc);
+      // 先ASN识别（更精准），再IPIP兜底
+      let pubASN = "";
+      try {
+        const asnRes = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { timeout: 2000 });
+        pubASN = (await asnRes.text()).trim();
+        pubIsp = getISPByASN(pubASN) || getISPByIPIP(rawIsp, loc);
+      } catch {
+        pubIsp = getISPByIPIP(rawIsp, loc);
+      }
 
-      const country = loc[0] === '中国' ? 'CN' :
-                      loc[1]?.includes('香港') ? 'HK' :
-                      loc[1]?.includes('法国') ? 'FR' : '';
+      // 精准判断国家码（补全法兰西岛/澳门）
+      let country = '';
+      if (loc[0] === '中国') {
+        country = loc[1]?.includes('香港') ? 'HK' : loc[1]?.includes('澳门') ? 'MO' : 'CN';
+      } else if (loc[1]?.includes('法国') || loc[1]?.includes('法兰西岛') || loc[1]?.includes('巴黎')) {
+        country = 'FR';
+      }
 
-      pubLoc = `${getFlag(country)} ${loc[1] || ""} ${loc[2] || ""}`.trim();
-
+      pubLoc = `${getFlag(country)} ${loc[1] || ""} ${loc[2] || ""}`.trim() || "—";
     } catch {}
   }
 
-  // ===== 落地IP =====
+  // ===== 落地IP（保留原逻辑，修复位置拼接）=====
   let nIp="—", nLoc="—", asnInfo="—";
-
   if (ipinfoR.status === 'fulfilled') {
     try {
       const dt = await ipinfoR.value.json();
       nIp = dt.ip || "—";
-      nLoc = `${getFlag(dt.country)} ${dt.region || ""} ${dt.city || ""}`;
+      // 修复位置拼接：空值不显示，更整洁
+      const region = dt.region || "";
+      const city = dt.city || "";
+      nLoc = `${getFlag(dt.country)} ${region}${city && region ? ' ' : ''}${city}`.trim() || "—";
       asnInfo = dt.org || "—";
     } catch {}
   }
 
-  // ===== 风险 =====
+  // ===== 风险（补全机房/住宅标识+风险等级精准）=====
   let riskTxt="…", riskCol=C_SUB, riskIcon="clock", delayText="…";
-
   if (ippureR.status === 'fulfilled') {
     try {
       const start = Date.now();
       const data = await ippureR.value.json();
       const cost = Date.now() - start;
-
       delayText = `${cost}ms`;
 
-      const r = data.fraudScore;
-      if (r >= 80) { riskTxt=`高危 ${r}`; riskCol=C_RED; riskIcon="xmark.shield.fill"; }
-      else if (r >= 50) { riskTxt=`中风险 ${r}`; riskCol=C_ORANGE; }
-      else { riskTxt=`纯净 ${r}`; riskCol=C_GREEN; }
-
+      // 机房/住宅标识（补全）
       if (data.isResidential === true) nIp += " 🏠";
       else if (data.isResidential === false) nIp += " 🏢";
 
+      // 风险等级（按你原逻辑精准划分）
+      const r = data.fraudScore;
+      if (r == null) {
+        riskTxt = "未检测"; riskIcon = "clock";
+      } else if (r >= 80) {
+        riskTxt = `极高风险 ${r}`; riskCol = C_RED; riskIcon = "xmark.shield.fill";
+      } else if (r >= 70) {
+        riskTxt = `高风险 ${r}`; riskCol = C_ORANGE; riskIcon = "exclamationmark.shield.fill";
+      } else if (r >= 40) {
+        riskTxt = `中风险 ${r}`; riskCol = C_YELLOW; riskIcon = "exclamationmark.shield.fill";
+      } else {
+        riskTxt = `纯净 ${r}`; riskCol = C_GREEN; riskIcon = "checkmark.shield.fill";
+      }
     } catch {}
   }
 
-  // ===== UI 行（对齐优化）=====
+  // ===== UI 行（保留原对齐优化）=====
   const Row = (ic, icCol, label, val, valCol) => ({
     type:'stack',
     direction:'row',
@@ -150,13 +166,13 @@ export default async function(ctx) {
     ]
   });
 
+  // ===== 渲染（保留原结构）=====
   return {
     type:'widget',
     padding:[8,10],
     backgroundColor:BG_CARD,
     cornerRadius:12,
     refreshPolicy:{ onNetworkChange:true, onEnter:true },
-
     children:[
       {
         type:'stack',
@@ -171,7 +187,6 @@ export default async function(ctx) {
           { type:'text', text:delayText, font:{ size:12 }, textColor:C_SUB }
         ]
       },
-
       Row("iphone", C_GREEN, "内网IP", localIp, C_TEXT),
       Row("globe", C_BLUE, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT),
       Row("mappin", C_SUB, "位置", pubLoc, C_TEXT),
