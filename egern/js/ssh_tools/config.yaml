@@ -1,28 +1,32 @@
 name: "三合一服务器监控"
-description: "同时监控三台服务器状态，支持 Large 尺寸分栏显示"
+description: "同时监控三台服务器状态（支持密码 / 私钥）"
 
 env_schema:
   # VPS 1
-  vps1_host: { name: "VPS1 地址", description: "IP 或 域名" }
+  vps1_host: { name: "VPS1 地址" }
   vps1_user: { name: "VPS1 用户", default_value: "root" }
-  vps1_pass: { name: "VPS1 密码", description: "SSH 密码" }
+  vps1_pass: { name: "VPS1 密码（可选）" }
+  vps1_key:  { name: "VPS1 私钥（可选）" }
   vps1_port: { name: "VPS1 端口", default_value: "22" }
+
   # VPS 2
   vps2_host: { name: "VPS2 地址" }
   vps2_user: { name: "VPS2 用户", default_value: "root" }
-  vps2_pass: { name: "VPS2 密码" }
+  vps2_pass: { name: "VPS2 密码（可选）" }
+  vps2_key:  { name: "VPS2 私钥（可选）" }
   vps2_port: { name: "VPS2 端口", default_value: "22" }
+
   # VPS 3
   vps3_host: { name: "VPS3 地址" }
   vps3_user: { name: "VPS3 用户", default_value: "root" }
-  vps3_pass: { name: "VPS3 密码" }
+  vps3_pass: { name: "VPS3 密码（可选）" }
+  vps3_key:  { name: "VPS3 私钥（可选）" }
   vps3_port: { name: "VPS3 端口", default_value: "22" }
 
 scriptings:
   - generic:
       name: "三合一监控脚本"
-      # 请将下方链接替换为你托管在 GitHub 上的 JS 原始链接 (raw)
-      script_url: "https://github.com/fantafender/rule_collections/edit/main/egern/js/ssh_tools/Server_Moniter.js"
+      script_url: "https://raw.githubusercontent.com/fantafender/rule_collections/main/egern/js/ssh_tools/Server_Moniter.js"
 
 widgets:
   - name: "多机监控"
