@@ -22,7 +22,7 @@ scriptings:
   - generic:
       name: "三合一监控脚本"
       # 请将下方链接替换为你托管在 GitHub 上的 JS 原始链接 (raw)
-      script_url: "https://raw.githubusercontent.com/你的用户名/仓库名/main/server-monitor.js"
+      script_url: "https://github.com/fantafender/rule_collections/edit/main/egern/js/ssh_tools/Server_Moniter.js"
 
 widgets:
   - name: "多机监控"
