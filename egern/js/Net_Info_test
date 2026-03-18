@@ -1,5 +1,5 @@
 /**
- * 📌  测试GPT的解锁逻辑，参考了 https://github.com/xykt/IPQuality IP质量检测脚本
+ * 📌  修正了流媒体的验证逻辑，参考了 https://github.com/xykt/IPQuality IP质量检测脚本
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
@@ -441,12 +441,10 @@ async function fetchBaseInfo(globalStart) {
         headers: { "User-Agent": BASE_UA },
         followRedirect: false
       }).catch(() => null);
-      const headOk = !!headRes;
-      const locationHeader = (headRes?.headers?.location || headRes?.headers?.Location || "");
-  // 保留原有检测但更明确地表示 Web 端是否可访问
-  // 若能拿到响应（headOk）且存在 Location 或状态码不是 4xx/5xx，则认为 Web 可访问
-  const status = headRes?.status || 0;
-  const webAccessible = headOk && (!!locationHeader || (status > 0 && status < 400));
+  const headOk = !!headRes;
+  const locationHeader = (headRes?.headers?.location || headRes?.headers?.Location || "");
+  // 采用对方的 web 判定逻辑：禁止自动跳转时仅在存在 Location header（重定向）时才认为 Web 可访问
+  const webAccessible = headOk && !!locationHeader;
 
       // 2) 访问 ios.chat.openai.com 拿正文和 cf_details（代表 APP 接口是否可用）
       const iosRes = await ctx.http.get("https://ios.chat.openai.com", {
