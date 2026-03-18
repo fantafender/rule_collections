@@ -1,6 +1,5 @@
 export default async function (ctx) {
 
-  // ───────── 配色 ─────────
   const C = {
     bg1: '#0d1117', bg2: '#161b22', barBg: '#30363d',
     text: '#f0f6fc', muted: '#8b949e', dim: '#484f58',
@@ -18,15 +17,14 @@ export default async function (ctx) {
     return Math.round(b) + 'B';
   };
 
-  // ───────── IP 地理缓存 ─────────
+  // 🌍 地理信息
   async function getGeo(ip) {
     const key = `_geo_${ip}`;
-    const cached = ctx.storage.getJSON(key);
-    if (cached) return cached;
-
+    const c = ctx.storage.getJSON(key);
+    if (c) return c;
     try {
-      const res = await ctx.fetch(`https://ipinfo.io/${ip}/json`);
-      const j = await res.json();
+      const r = await ctx.fetch(`https://ipinfo.io/${ip}/json`);
+      const j = await r.json();
       const geo = { country: j.country || '??' };
       ctx.storage.setJSON(key, geo);
       return geo;
@@ -35,7 +33,7 @@ export default async function (ctx) {
     }
   }
 
-  // ───────── 单节点获取（带缓存） ─────────
+  // 🔐 SSH 连接（支持 key）
   async function fetchServer(id) {
     const prefix = `vps${id}_`;
     const host = ctx.env[prefix + 'host'];
@@ -43,17 +41,18 @@ export default async function (ctx) {
 
     const cacheKey = `_cache_${id}`;
     const cache = ctx.storage.getJSON(cacheKey);
-
-    // 👉 15秒缓存（避免3连SSH）
     if (cache && Date.now() - cache.ts < 15000) return cache.data;
 
     try {
+      const privateKey = ctx.env[prefix + 'key'];
+      const password = ctx.env[prefix + 'pass'];
+
       const session = await ctx.ssh.connect({
         host,
         port: Number(ctx.env[prefix + 'port'] || 22),
         username: ctx.env[prefix + 'user'],
-        password: ctx.env[prefix + 'pass'],
-        timeout: 4000
+        ...(privateKey ? { privateKey } : { password }),
+        timeout: 5000
       });
 
       const SEP = '<<SEP>>';
@@ -104,10 +103,8 @@ export default async function (ctx) {
           txR = Math.max(0, (tx - prevNet.tx) / dt);
         }
       }
-
       ctx.storage.setJSON(`_net_${id}`, { rx, tx, ts: now });
 
-      // GEO
       const geo = await getGeo(host);
 
       const data = {
@@ -122,7 +119,6 @@ export default async function (ctx) {
       };
 
       ctx.storage.setJSON(cacheKey, { ts: now, data });
-
       return data;
 
     } catch {
@@ -130,14 +126,12 @@ export default async function (ctx) {
     }
   }
 
-  // ───────── 拉取三节点 ─────────
   const servers = [
     await fetchServer(1),
     await fetchServer(2),
     await fetchServer(3)
   ];
 
-  // ───────── UI 组件 ─────────
   const bar = (pct, color) => ({
     type: 'stack',
     direction: 'row',
@@ -168,41 +162,25 @@ export default async function (ctx) {
       },
 
       ...(s.error ? [
-        { type: 'spacer' },
-        { type: 'text', text: s.error, textColor: C.error, textAlign: 'center' },
-        { type: 'spacer' }
+        { type: 'text', text: s.error, textColor: C.error, textAlign: 'center' }
       ] : [
-
-        { type: 'text', text: `CPU ${s.cpu}%`, font: { size: 10 }, textColor: pctColor(s.cpu) },
+        { type: 'text', text: `CPU ${s.cpu}%`, textColor: pctColor(s.cpu) },
         bar(s.cpu, pctColor(s.cpu)),
 
-        { type: 'text', text: `MEM ${s.mem}%`, font: { size: 10 }, textColor: pctColor(s.mem) },
+        { type: 'text', text: `MEM ${s.mem}%`, textColor: pctColor(s.mem) },
         bar(s.mem, pctColor(s.mem)),
 
-        { type: 'text', text: `DSK ${s.disk}%`, font: { size: 10 }, textColor: pctColor(s.disk) },
+        { type: 'text', text: `DSK ${s.disk}%`, textColor: pctColor(s.disk) },
         bar(s.disk, pctColor(s.disk)),
 
-        {
-          type: 'text',
-          text: `↓${fmt(s.rxR)} ↑${fmt(s.txR)}`,
-          font: { size: 10, family: 'Menlo' },
-          textColor: C.net
-        },
-
-        {
-          type: 'text',
-          text: `LOAD ${s.load}`,
-          font: { size: 9, family: 'Menlo' },
-          textColor: C.dim
-        }
+        { type: 'text', text: `↓${fmt(s.rxR)} ↑${fmt(s.txR)}`, font: { size: 10, family: 'Menlo' }, textColor: C.net },
+        { type: 'text', text: `LOAD ${s.load}`, font: { size: 9, family: 'Menlo' }, textColor: C.dim }
       ])
     ]
   });
 
-  // ───────── 状态判断 ─────────
   const hasError = servers.some(s => s.error);
 
-  // ───────── Large 布局 ─────────
   if (ctx.widgetFamily === 'large' || ctx.widgetFamily === 'systemLarge' || !ctx.widgetFamily) {
     return {
       type: 'widget',
@@ -214,7 +192,6 @@ export default async function (ctx) {
       },
       padding: 12,
       children: [
-
         {
           type: 'stack',
           direction: 'row',
@@ -251,7 +228,6 @@ export default async function (ctx) {
     };
   }
 
-  // fallback
   return {
     type: 'widget',
     backgroundColor: C.bg1,
