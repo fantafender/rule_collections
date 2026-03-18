@@ -1,5 +1,5 @@
 /**
- * 📌  修正取不到正文
+ * 📌  更新TikTok解锁逻辑，如果解锁了，能取到地区码输出地区码，否则OK。解锁不了返回X
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
@@ -195,6 +195,20 @@ export default async function(ctx) {
 
   const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
 
+  const readBody = async (r) => {
+    if (!r) return "";
+    if (typeof r.body === "string" && r.body.length) return r.body;
+    if (typeof r.text === "function") {
+      try {
+        const t = await r.text();
+        return typeof t === "string" ? t : "";
+      } catch {
+        return "";
+      }
+    }
+    return "";
+  };
+
   async function dohResolveA(ctx, hostname, provider) {
     // 使用 DNS-over-HTTPS 获取 A 记录，尽量贴近 reference1 的多路 DNS 思路
     // provider: cloudflare | google | quad9
@@ -255,6 +269,59 @@ export default async function(ctx) {
     return (geoHint || "XX").toUpperCase();
   }
 
+  // ===================== TikTok 检测（按 reference1 思路：region + Please wait... 兜底）=====================
+  async function checkTikTok(ctx) {
+    try {
+      // reference1: 先拉主页，若遇到 "Please wait..." 再拉 /explore
+      const fetchOnce = async (url, extraHeaders = {}) => {
+        const r = await ctx.http.get(url, {
+          timeout: 6000,
+          headers: { "User-Agent": BASE_UA, ...extraHeaders },
+          followRedirect: true
+        }).catch(() => null);
+        const body = await readBody(r);
+        return { status: r?.status || 0, body };
+      };
+
+      const r1 = await fetchOnce("https://www.tiktok.com/");
+      let body1 = r1.body || "";
+      if (body1.includes("Please wait...")) {
+        const rExplore = await fetchOnce("https://www.tiktok.com/explore");
+        body1 = rExplore.body || body1;
+      }
+
+      // reference1: 从 HTML 中 grep '"region":' 抽取
+      const m1 = body1.match(/"region"\s*:\s*"([A-Z]{2})"/);
+      if (m1?.[1]) return m1[1];
+
+      // reference1: 第二次带更完整 header（含 gzip / en）
+      const r2 = await fetchOnce("https://www.tiktok.com/", {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+        "Accept-Encoding": "gzip",
+        "Accept-Language": "en"
+      });
+      let body2 = r2.body || "";
+      if (body1.includes("Please wait...")) {
+        const rExplore2 = await fetchOnce("https://www.tiktok.com/explore", {
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+          "Accept-Encoding": "gzip",
+          "Accept-Language": "en"
+        });
+        body2 = rExplore2.body || body2;
+      }
+
+      const m2 = body2.match(/"region"\s*:\s*"([A-Z]{2})"/);
+      if (m2?.[1]) return m2[1];
+
+      // 有内容但解析不到 region：按 OK（避免误报）
+      if (body1 || body2) return "OK";
+
+      return "❌";
+    } catch {
+      return "❌";
+    }
+  }
+
   async function checkNetflix(ctx, geoHint = "XX") {
     try {
       // 1) DNS 多路解析 -> unlockType
@@ -277,20 +344,6 @@ export default async function(ctx) {
           }).catch(() => ({ status: 0, body: "" }))
         )
       );
-
-      const readBody = async (r) => {
-        if (!r) return "";
-        if (typeof r.body === "string" && r.body.length) return r.body;
-        if (typeof r.text === "function") {
-          try {
-            const t = await r.text();
-            return typeof t === "string" ? t : "";
-          } catch {
-            return "";
-          }
-        }
-        return "";
-      };
 
       const [body1, body2] = await Promise.all([readBody(r1), readBody(r2)]);
       // 如果两次都完全没有正文，基本可视为网络/环境拦截（比如 TLS/连接失败）
@@ -325,6 +378,12 @@ export default async function(ctx) {
       // 奈飞解锁检测逻辑（✅ Bash风格）
       if (isNetflix) {
         const resultText = await checkNetflix(ctx, geoHint);
+        return { name, region: resultText };
+      }
+
+      // TikTok 解锁检测（按 reference1 思路）
+      if (name === "TikTok") {
+        const resultText = await checkTikTok(ctx);
         return { name, region: resultText };
       }
 
