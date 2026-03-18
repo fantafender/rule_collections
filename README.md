@@ -11,16 +11,19 @@ https://raw.githubusercontent.com/fantafender/rule_collections/refs/heads/main/e
 https://raw.githubusercontent.com/fantafender/rule_collections/refs/heads/main/egern/China_Direct.yaml
 ## rewrite test
 https://github.com/fantafender/rule_collections/blob/main/egern/rewrite.yaml
+
+
+
 # JS文件夹
 ## Network_monitor  egern小组件稳定版（脚本-通用）
-1. 通过直连ip获取ASN来确定实际运营商
-2. 切换节点后刷新，留有1200ms容错来获取网络数据
 https://raw.githubusercontent.com/fantafender/rule_collections/refs/heads/main/egern/js/Network_monitor
-
 ## network_ultra 
-
-https://raw.githubusercontent.com/fantafender/rule_collections/refs/heads/main/egern/js/network_ultra
+https://raw.githubusercontent.com/fantafender/rule_collections/refs/heads/main/egern/js/Network_Ultra
 1. 显示RTT延迟及接口延
 2. 并发处理数据
 3. 增强了全球运营商显示
 
+## Net_Info_With_Unlock
+参考了https://github.com/xykt/IPQuality IP质量检测脚本的逻辑，谢谢大佬
+下方横条展示GPT Gemini 奈飞 TikTok DisneyPlus的解锁情况
+https://raw.githubusercontent.com/fantafender/rule_collections/refs/heads/main/egern/js/Net_Info_With_Unlock
