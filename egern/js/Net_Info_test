@@ -1,5 +1,5 @@
 /**
- * 📌  修了迪士尼解锁
+ * 📌  全面修改了ChatGpt验证逻辑
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
@@ -322,6 +322,77 @@ export default async function(ctx) {
     }
   }
 
+  // ===================== ChatGPT 检测（按 checkref2.MediaUnlockTest_ChatGPT 思路）=====================
+  async function checkChatGPT(ctx) {
+    try {
+      // 1) 访问 chatgpt.com 取响应头（看是否有 Location）
+      const headRes = await ctx.http.get("https://chatgpt.com", {
+        timeout: 10000,
+        headers: { "User-Agent": BASE_UA },
+        followRedirect: false
+      }).catch(() => null);
+
+      const headOk = !!headRes;
+
+      // 2) 访问 ios.chat.openai.com 拿正文和 cf_details
+      const iosRes = await ctx.http.get("https://ios.chat.openai.com", {
+        timeout: 10000,
+        headers: { "User-Agent": BASE_UA },
+        followRedirect: true
+      }).catch(() => null);
+
+      const iosBody = await readBody(iosRes);
+      // cf_details 可能在 JSON，也可能在内嵌脚本里，先尝试 JSON，再用正则兜底
+      let cfDetails = "";
+      try {
+        const asJson = iosBody ? JSON.parse(iosBody) : null;
+        if (asJson && asJson.cf_details) cfDetails = String(asJson.cf_details);
+      } catch {
+        const m = iosBody.match(/"cf_details"\s*:\s*"([^"]*)"/);
+        if (m?.[1]) cfDetails = m[1];
+      }
+
+      // 网络直接失败
+      if (!headOk) return "❌";
+
+      const locationHeader = (headRes.headers?.location || headRes.headers?.Location || "");
+      const hasLocation = !!locationHeader;
+
+      // 3) 没有 location：进一步看是否被封锁 / 不支持地区 / 禁止 ISP
+      if (!hasLocation) {
+        if (iosBody.includes("blocked_why_headline")) return "❌";
+        if (iosBody.includes("unsupported_country_region_territory")) return "❌";
+        if (cfDetails.includes("(1)")) return "❌";
+        if (cfDetails.includes("(2)")) return "❌";
+        return "❌";
+      }
+
+      // 4) 有 location：说明 Web 至少可访问，再根据 cf_details 区分 WebOnly / 完全可用
+      // 先用 Cloudflare trace 获取 loc 作为地区码
+      const traceRes = await ctx.http.get("https://chatgpt.com/cdn-cgi/trace", {
+        timeout: 8000,
+        headers: { "User-Agent": BASE_UA },
+        followRedirect: true
+      }).catch(() => null);
+      const traceTxt = await readBody(traceRes);
+      let region = "XX";
+      if (traceTxt) {
+        const m = traceTxt.match(/loc=([A-Z]{2})/);
+        if (m?.[1]) region = m[1];
+      }
+
+      if (cfDetails.includes("(1)") || cfDetails.includes("(2)")) {
+        // 仅网页可用
+        return "Web";
+      }
+
+      // 完整可用：返回地区码
+      return region || "XX";
+    } catch {
+      return "❌";
+    }
+  }
+
   async function checkNetflix(ctx, geoHint = "XX") {
     try {
       // 1) DNS 多路解析 -> unlockType
@@ -496,7 +567,13 @@ export default async function(ctx) {
         return { name, region: resultText };
       }
 
-      // 非奈飞平台检测逻辑（保留原有）
+      // ChatGPT（GPT）检测：按 checkref2 Bash 版逻辑
+      if (name === "GPT") {
+        const resultText = await checkChatGPT(ctx);
+        return { name, region: resultText };
+      }
+
+      // 非奈飞/非 GPT 平台检测逻辑（保留原有）
       const res = await ctx.http.get(url, {
         timeout: 4500,
         headers: commonHeaders,
@@ -512,11 +589,6 @@ export default async function(ctx) {
       // AI/其他平台关键词过滤逻辑
       const finalUrl = res.url || "";
       const isBlocked = finalUrl.includes("unsupported") || finalUrl.includes("error") || finalUrl.includes("preview");
-      
-      // GPT 特殊判定：302 到登录页也算 OK
-      if (name === "GPT") {
-        if (res.status === 200 || res.status === 302) return { name, region: geoHint };
-      }
 
       if (res.status === 200 && !isBlocked) {
         return { name, region: geoHint };
