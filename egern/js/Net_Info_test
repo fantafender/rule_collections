@@ -1,5 +1,5 @@
 /**
- * 📌  全面修改了ChatGpt验证逻辑
+ * 📌  更新了迪士尼解锁
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
@@ -62,121 +62,139 @@ export default async function(ctx) {
 
   const DEFAULT_ISP = "未知运营商";
 
-  // ===================== 国旗（保留原逻辑，仅nLoc去emoji）=====================
-  function getFlagFromIPIP(locArr) {
-    const country = locArr[0] || "";
-    const map = {
-      "中国": "CN", "日本": "JP", "美国": "US", "法国": "FR",
-      "德国": "DE", "新加坡": "SG", "英国": "GB", "韩国": "KR",
-      "加拿大": "CA", "澳大利亚": "AU", "荷兰": "NL"
-    };
-    let code = map[country];
-    if (!code) {
-      if (locArr[1]?.includes("香港")) code = "HK";
-      else if (locArr[1]?.includes("澳门")) code = "MO";
-      else if (locArr[1]?.includes("台湾")) code = "TW";
-    }
-    if (!code) return "🌐";
-    return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt()));
-  }
 
-  // ===================== 🔥 获取物理出口（用于奈飞GeoIP融合）=====================
-  async function getPhysicalLoc() {
+// ===================== 国旗（保留原逻辑，仅nLoc去emoji）=====================
+function getFlagFromIPIP(locArr) {
+  const country = locArr[0] || "";
+  const map = {
+    "中国": "CN", "日本": "JP", "美国": "US", "法国": "FR",
+    "德国": "DE", "新加坡": "SG", "英国": "GB", "韩国": "KR",
+    "加拿大": "CA", "澳大利亚": "AU", "荷兰": "NL"
+  };
+  let code = map[country];
+  if (!code) {
+    if (locArr[1]?.includes("香港")) code = "HK";
+    else if (locArr[1]?.includes("澳门")) code = "MO";
+    else if (locArr[1]?.includes("台湾")) code = "TW";
+  }
+  if (!code) return "🌐";
+  return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt()));
+}
+
+// ===================== 新增：根据国家码生成落地国旗 =====================
+function getFlagFromCountryCode(countryCode) {
+  if (!countryCode || countryCode === "XX") return "🌐";
+  const specialMap = {
+    "HK": "🇭🇰",
+    "MO": "🇲🇴",
+    "TW": "🇹🇼"
+  };
+  if (specialMap[countryCode]) return specialMap[countryCode];
+  if (countryCode.length === 2 && /^[A-Z]{2}$/.test(countryCode)) {
+    return String.fromCodePoint(...countryCode.split('').map(c => 127397 + c.charCodeAt()));
+  }
+  return "🌐";
+}
+
+// ===================== 🔥 获取物理出口（用于奈飞GeoIP融合）=====================
+async function getPhysicalLoc() {
+  try {
+    const res = await ctx.http.get("https://1.1.1.1/cdn-cgi/trace", { timeout: 2500 });
+    const match = res.body?.match(/loc=([A-Z]{2})/);
+    return match && match[1] !== "XX" ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+// ===================== 🔥 新增：整合基础IP信息获取函数 =====================
+async function fetchBaseInfo(globalStart) {
+  // 初始化返回数据
+  const baseInfo = {
+    realTcpDelay: 0,
+    apiResponseTime: 0,
+    ipData: {},
+    pubIp: "—",
+    pubLoc: "—",
+    pubIsp: DEFAULT_ISP,
+    pubASN: "",
+    nIp: "—",
+    nLoc: "—",
+    asnInfo: "—",
+    ipinfoCountry: "", // ✅ 新增：ipinfo国家码
+    countryCode: "XX"  // 解锁检测用国家码
+  };
+
+  // 1. 网络 RTT（HTTPS 真实延迟）
+  const pingTask = ctx.http.get("https://1.1.1.1/cdn-cgi/trace", { timeout: 2500 })
+    .then(() => { baseInfo.realTcpDelay = Date.now() - globalStart; })
+    .catch(() => { baseInfo.realTcpDelay = 0; });
+
+  // 2. 接口延迟（剔除 JSON 解析）
+  const ippureTask = ctx.http.get("https://my.ippure.com/v1/info", { timeout: 5000 })
+    .then(async (res) => {
+      const t0 = Date.now();
+      baseInfo.ipData = await res.json();
+      const parseTime = Date.now() - t0;
+      baseInfo.apiResponseTime = (Date.now() - globalStart) - parseTime;
+    })
+    .catch(() => { baseInfo.apiResponseTime = 0; });
+
+  // 3. 其他IP信息
+  const ipipPromise = ctx.http.get("https://myip.ipip.net/json", {
+    headers: { "User-Agent": "Mozilla/5.0" }, timeout: 5000
+  }).catch(() => null);
+
+  const ipinfoPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 })
+    .catch(() => null);
+
+  // 并行执行
+  const [_, __, ipipResRaw, ipinfoResRaw] = await Promise.all([
+    pingTask,
+    ippureTask,
+    ipipPromise,
+    ipinfoPromise
+  ]);
+
+  // 解析ipip数据
+  if (ipipResRaw) {
     try {
-      const res = await ctx.http.get("https://1.1.1.1/cdn-cgi/trace", { timeout: 2500 });
-      const match = res.body?.match(/loc=([A-Z]{2})/);
-      return match && match[1] !== "XX" ? match[1] : null;
-    } catch {
-      return null;
-    }
-  }
-
-  // ===================== 🔥 新增：整合基础IP信息获取函数 =====================
-  async function fetchBaseInfo(globalStart) {
-    // 初始化返回数据
-    const baseInfo = {
-      realTcpDelay: 0,
-      apiResponseTime: 0,
-      ipData: {},
-      pubIp: "—",
-      pubLoc: "—",
-      pubIsp: DEFAULT_ISP,
-      pubASN: "",
-      nIp: "—",
-      nLoc: "—",
-      asnInfo: "—",
-      ipinfoCountry: "", // ✅ 新增：ipinfo国家码
-      countryCode: "XX"  // 解锁检测用国家码
-    };
-
-    // 1. 网络 RTT（HTTPS 真实延迟）
-    const pingTask = ctx.http.get("https://1.1.1.1/cdn-cgi/trace", { timeout: 2500 })
-      .then(() => { baseInfo.realTcpDelay = Date.now() - globalStart; })
-      .catch(() => { baseInfo.realTcpDelay = 0; });
-
-    // 2. 接口延迟（剔除 JSON 解析）
-    const ippureTask = ctx.http.get("https://my.ippure.com/v1/info", { timeout: 5000 })
-      .then(async (res) => {
-        const t0 = Date.now();
-        baseInfo.ipData = await res.json();
-        const parseTime = Date.now() - t0;
-        baseInfo.apiResponseTime = (Date.now() - globalStart) - parseTime;
-      })
-      .catch(() => { baseInfo.apiResponseTime = 0; });
-
-    // 3. 其他IP信息
-    const ipipPromise = ctx.http.get("https://myip.ipip.net/json", {
-      headers: { "User-Agent": "Mozilla/5.0" }, timeout: 5000
-    }).catch(() => null);
-
-    const ipinfoPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 })
-      .catch(() => null);
-
-    // 并行执行
-    const [_, __, ipipResRaw, ipinfoResRaw] = await Promise.all([
-      pingTask,
-      ippureTask,
-      ipipPromise,
-      ipinfoPromise
-    ]);
-
-    // 解析ipip数据
-    if (ipipResRaw) {
-      try {
-        const body = await ipipResRaw.json();
-        if (body?.data) {
-          baseInfo.pubIp = body.data.ip || "—";
-          if (baseInfo.pubIp) {
-            baseInfo.pubASN = await ctx.http.get(`https://ipapi.co/${baseInfo.pubIp}/asn/`, { timeout: 3000 })
-              .then(r => r.text().then(t => t.trim())).catch(() => "");
-          }
-          const locArr = Array.isArray(body.data.location) 
-            ? body.data.location 
-            : (body.data.location || "").split(" ").filter(Boolean);
-          baseInfo.pubIsp = getISPByASN(baseInfo.pubASN) || getISPByIPIP(locArr[4] || locArr[3] || "", locArr) || DEFAULT_ISP;
-          const flag = getFlagFromIPIP(locArr);
-          baseInfo.pubLoc = `${flag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
+      const body = await ipipResRaw.json();
+      if (body?.data) {
+        baseInfo.pubIp = body.data.ip || "—";
+        if (baseInfo.pubIp) {
+          baseInfo.pubASN = await ctx.http.get(`https://ipapi.co/${baseInfo.pubIp}/asn/`, { timeout: 3000 })
+            .then(r => r.text().then(t => t.trim())).catch(() => "");
         }
-      } catch (e) {}
-    }
-
-    // 解析ipinfo数据（✅ 重点修改：新增ipinfoCountry + 去emoji）
-    if (ipinfoResRaw) {
-      try {
-        const dt = await ipinfoResRaw.json();
-        baseInfo.nIp = dt.ip || "—";
-        // ✅ 核心：新增ipinfoCountry变量
-        baseInfo.ipinfoCountry = (dt.country || "").toUpperCase();
-        // ✅ 去emoji依赖：nLoc不再拼接flag
-        baseInfo.nLoc = `${dt.region || ""} ${dt.city || ""}`.trim() || "—";
-        baseInfo.asnInfo = dt.org || "—";
-        // 赋值给解锁检测用的countryCode
-        baseInfo.countryCode = baseInfo.ipinfoCountry || "XX";
-      } catch (e) {}
-    }
-
-    return baseInfo;
+        const locArr = Array.isArray(body.data.location) 
+          ? body.data.location 
+          : (body.data.location || "").split(" ").filter(Boolean);
+        baseInfo.pubIsp = getISPByASN(baseInfo.pubASN) || getISPByIPIP(locArr[4] || locArr[3] || "", locArr) || DEFAULT_ISP;
+        const flag = getFlagFromIPIP(locArr);
+        baseInfo.pubLoc = `${flag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
+      }
+    } catch (e) {}
   }
+
+  // 解析ipinfo数据（✅ 重点修改：新增ipinfoCountry + 加回落地国旗）
+  if (ipinfoResRaw) {
+    try {
+      const dt = await ipinfoResRaw.json();
+      baseInfo.nIp = dt.ip || "—";
+      // ✅ 核心：新增ipinfoCountry变量
+      baseInfo.ipinfoCountry = (dt.country || "").toUpperCase();
+      // ✅ 加回落地国旗：调用新增的国旗生成函数
+      const nFlag = getFlagFromCountryCode(baseInfo.ipinfoCountry);
+      // ✅ 拼接国旗+地区文本
+      baseInfo.nLoc = `${nFlag} ${dt.region || ""} ${dt.city || ""}`.trim() || "—";
+      baseInfo.asnInfo = dt.org || "—";
+      // 赋值给解锁检测用的countryCode
+      baseInfo.countryCode = baseInfo.ipinfoCountry || "XX";
+    } catch (e) {}
+  }
+
+  return baseInfo;
+}
 
   // ===================== 🔥 解锁检测核心逻辑 =====================
   const BASE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
