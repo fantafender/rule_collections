@@ -1,5 +1,5 @@
 /**
- * 📌  修正了流媒体的验证逻辑，参考了 https://github.com/xykt/IPQuality IP质量检测脚本
+ * 📌  修正了GPT的验证逻辑，参考了 https://github.com/xykt/IPQuality IP质量检测脚本
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
@@ -493,7 +493,8 @@ async function fetchBaseInfo(globalStart) {
           const m = traceTxt.match(/loc=([A-Z]{2})/);
           if (m?.[1]) return m[1];
         }
-        return "XX";
+        // trace 未能提供国家码时，表示两端可访问但地区未知，返回 OK 以表示可用
+        return "OK";
       }
 
       // 兜底（不应到达）
