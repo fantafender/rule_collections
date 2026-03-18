@@ -675,7 +675,7 @@ async function fetchBaseInfo(globalStart) {
       Row("mappin", C_SUB, "落地地区", baseInfo.nLoc, C_TEXT), // ✅ 已去emoji
       Row("number.square.fill", C_SUB, "ASN", baseInfo.asnInfo, C_TEXT),
       Row("shield.fill", riskColor, "风险评分", riskTxt, riskColor),
-      Row("play.tv.fill", C_BLUE, "解锁检测", unlockText, C_TEXT)
+      Row("play.tv.fill", C_BLUE, "解锁", unlockText, C_TEXT)
     ]
   };
 }
