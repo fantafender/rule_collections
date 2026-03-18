@@ -1,5 +1,5 @@
 /**
- * 📌  修正了流媒体的验证逻辑，参考了 https://github.com/xykt/IPQuality IP质量检测脚本
+ * 📌  修正了流媒体的验证逻辑
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
