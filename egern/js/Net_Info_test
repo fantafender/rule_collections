@@ -1,5 +1,5 @@
 /**
- * 📌  修正了流媒体的验证逻辑
+ * 📌  修正了Gemini的验证逻辑，参考了 https://github.com/xykt/IPQuality IP质量检测脚本
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
@@ -387,6 +387,50 @@ async function fetchBaseInfo(globalStart) {
     }
   }
 
+  // ===================== Gemini 检测（参考 checkref2 AIUnlockTest_Gemini_location）=====================
+  async function checkGemini(ctx) {
+    try {
+      const url = 'https://gemini.google.com/_/BardChatUi/data/batchexecute';
+      const bodyRaw = 'f.req=[["K4WWud","[[0],[\"en-US\"]]",null,"generic"]]';
+      // POST as form-like raw data to mimic bash curl --data-raw
+      const res = await ctx.http.post(url, {
+        timeout: 10000,
+        headers: { "User-Agent": BASE_UA, "Accept-Language": "en-US", "Content-Type": "application/x-www-form-urlencoded" },
+        body: bodyRaw,
+        followRedirect: true
+      }).catch(() => null);
+
+      const txt = await readBody(res);
+      if (!txt) return "❌";
+
+      // Try several extraction strategies, progressively more relaxed
+      // 1) JSON-like countryCode
+      let m = txt.match(/"countryCode"\s*:\s*"([A-Z]{2})"/i);
+      if (m?.[1]) return m[1].toUpperCase();
+
+      // 2) requestCountry.id pattern
+      m = txt.match(/"requestCountry"\s*:\s*\{[^}]*"id"\s*:\s*"([A-Z]{2})"/i);
+      if (m?.[1]) return m[1].toUpperCase();
+
+      // 3) The batchexecute encoded chunk may contain escaped brackets like [[\"TW\",\"S
+      m = txt.match(/\[\[\\?\"([A-Z]{2})\\?\",\\?\"S/);
+      if (m?.[1]) return m[1].toUpperCase();
+
+      // 4) Fallback: search near the K4WWud marker for two-letter code
+      const idx = txt.indexOf('K4WWud');
+      if (idx >= 0) {
+        const slice = txt.slice(idx, idx + 200);
+        const m2 = slice.match(/([A-Z]{2})/);
+        if (m2?.[1]) return m2[1].toUpperCase();
+      }
+
+      // 能拿到响应但无法解析出国家码：按 OK（可访问但未知地区）
+      return "OK";
+    } catch (e) {
+      return "❌";
+    }
+  }
+
 // ...existing code...
   // ===================== ChatGPT 检测（按 checkref2.MediaUnlockTest_ChatGPT 思路，输出仅 ❌ / APP / 地区码）=====================
   async function checkChatGPT(ctx) {
@@ -585,6 +629,12 @@ async function fetchBaseInfo(globalStart) {
       // ChatGPT（GPT）检测：按 checkref2 Bash 版逻辑
       if (name === "GPT") {
         const resultText = await checkChatGPT(ctx);
+        return { name, region: resultText };
+      }
+
+      // Gemini 检测：使用 checkref2 中的 AIUnlockTest_Gemini_location 思路
+      if (name === "Gemini") {
+        const resultText = await checkGemini(ctx);
         return { name, region: resultText };
       }
 
