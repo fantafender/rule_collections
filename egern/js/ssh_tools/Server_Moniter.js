@@ -17,7 +17,15 @@ export default async function (ctx) {
     return Math.round(b) + 'B';
   };
 
-  // 🌍 地理信息
+  // 🇺🇳 国家代码 → 国旗
+  function countryToFlag(cc) {
+    if (!cc || cc.length !== 2) return '🌐';
+    return cc.toUpperCase().replace(/./g, c =>
+      String.fromCodePoint(127397 + c.charCodeAt())
+    );
+  }
+
+  // 🌍 Geo
   async function getGeo(ip) {
     const key = `_geo_${ip}`;
     const c = ctx.storage.getJSON(key);
@@ -33,11 +41,14 @@ export default async function (ctx) {
     }
   }
 
-  // 🔐 SSH 连接（支持 key）
+  // 🔐 SSH
   async function fetchServer(id) {
     const prefix = `vps${id}_`;
     const host = ctx.env[prefix + 'host'];
-    if (!host) return { name: `VPS${id}`, error: 'NO CFG' };
+
+    if (!host) {
+      return { name: `VPS${id}`, error: 'NO CFG' };
+    }
 
     const cacheKey = `_cache_${id}`;
     const cache = ctx.storage.getJSON(cacheKey);
@@ -121,16 +132,20 @@ export default async function (ctx) {
       ctx.storage.setJSON(cacheKey, { ts: now, data });
       return data;
 
-    } catch {
-      return { name: host, error: 'OFFLINE' };
+    } catch (e) {
+      return {
+        name: host,
+        error: e.message.includes('auth') ? 'AUTH FAIL' : 'OFFLINE'
+      };
     }
   }
 
-  const servers = [
-    await fetchServer(1),
-    await fetchServer(2),
-    await fetchServer(3)
-  ];
+  // 🚀 并发执行（关键优化）
+  const servers = await Promise.all([
+    fetchServer(1),
+    fetchServer(2),
+    fetchServer(3)
+  ]);
 
   const bar = (pct, color) => ({
     type: 'stack',
@@ -157,12 +172,12 @@ export default async function (ctx) {
         children: [
           { type: 'text', text: s.name, font: { size: 12, weight: 'bold' }, textColor: C.text },
           { type: 'spacer' },
-          { type: 'text', text: s.country || '??', font: { size: 10 }, textColor: C.muted }
+          { type: 'text', text: countryToFlag(s.country), font: { size: 12 }, textColor: C.muted }
         ]
       },
 
       ...(s.error ? [
-        { type: 'text', text: s.error, textColor: C.error, textAlign: 'center' }
+        { type: 'text', text: `❌ ${s.error}`, textColor: C.error, textAlign: 'center' }
       ] : [
         { type: 'text', text: `CPU ${s.cpu}%`, textColor: pctColor(s.cpu) },
         bar(s.cpu, pctColor(s.cpu)),
@@ -181,57 +196,44 @@ export default async function (ctx) {
 
   const hasError = servers.some(s => s.error);
 
-  if (ctx.widgetFamily === 'large' || ctx.widgetFamily === 'systemLarge' || !ctx.widgetFamily) {
-    return {
-      type: 'widget',
-      backgroundGradient: {
-        type: 'linear',
-        colors: [C.bg1, C.bg2],
-        startPoint: { x: 0, y: 0 },
-        endPoint: { x: 0, y: 1 }
-      },
-      padding: 12,
-      children: [
-        {
-          type: 'stack',
-          direction: 'row',
-          children: [
-            { type: 'text', text: 'CLUSTER · MONITOR', font: { size: 12, weight: 'bold' }, textColor: C.muted },
-            { type: 'spacer' },
-            { type: 'date', date: new Date().toISOString(), format: 'time', font: { size: 10 }, textColor: C.dim }
-          ]
-        },
-
-        { type: 'spacer' },
-
-        {
-          type: 'stack',
-          direction: 'row',
-          gap: 8,
-          children: [
-            card(servers[0]),
-            card(servers[1]),
-            card(servers[2])
-          ]
-        },
-
-        { type: 'spacer' },
-
-        {
-          type: 'text',
-          text: hasError ? 'STATUS: DEGRADED' : 'STATUS: ALL SYSTEMS OPERATIONAL',
-          textColor: hasError ? C.error : C.dim,
-          textAlign: 'center',
-          font: { size: 10, weight: 'bold' }
-        }
-      ]
-    };
-  }
-
   return {
     type: 'widget',
-    backgroundColor: C.bg1,
+    backgroundGradient: {
+      type: 'linear',
+      colors: [C.bg1, C.bg2],
+      startPoint: { x: 0, y: 0 },
+      endPoint: { x: 0, y: 1 }
+    },
     padding: 12,
-    children: [card(servers[0])]
+    children: [
+      {
+        type: 'stack',
+        direction: 'row',
+        children: [
+          { type: 'text', text: 'CLUSTER · MONITOR', font: { size: 12, weight: 'bold' }, textColor: C.muted },
+          { type: 'spacer' },
+          { type: 'date', date: new Date().toISOString(), format: 'time', font: { size: 10 }, textColor: C.dim }
+        ]
+      },
+
+      { type: 'spacer' },
+
+      {
+        type: 'stack',
+        direction: 'row',
+        gap: 8,
+        children: servers.map(card)
+      },
+
+      { type: 'spacer' },
+
+      {
+        type: 'text',
+        text: hasError ? 'STATUS: DEGRADED' : 'STATUS: ALL SYSTEMS OPERATIONAL',
+        textColor: hasError ? C.error : C.dim,
+        textAlign: 'center',
+        font: { size: 10, weight: 'bold' }
+      }
+    ]
   };
 }
