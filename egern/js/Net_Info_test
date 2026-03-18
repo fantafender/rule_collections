@@ -1,5 +1,5 @@
 /**
- * 📌  更新了奈飞解锁逻辑
+ * 📌  更新了奈飞解锁逻辑 修正解锁判断
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
@@ -217,32 +217,22 @@ export default async function(ctx) {
           } catch {}
         }));
 
-        // 2️⃣ 决策逻辑（核心）
-        if (unlocked.length === 0) {
-          return { name, region: "❌" };
-        }
+if (unlocked.length === 0) {
+  return { name, region: "❌" };
+}
 
-        // 🎯 US优先（最大库）
-        if (unlocked.includes("US")) {
-          return { name, region: "US" };
-        }
+// 🎯 高可信区域优先
+if (unlocked.includes("TW")) return { name, region: "TW" };
+if (unlocked.includes("JP")) return { name, region: "JP" };
+if (unlocked.includes("KR")) return { name, region: "KR" };
 
-        // 🎯 关键：HK / TW 分辨
-        if (unlocked.includes("TW")) {
-          // 如果Geo倾向HK/SG，但内容是TW → 判定TW解锁
-          if (geoHint === "HK" || geoHint === "SG") {
-            return { name, region: "TW" };
-          }
-          return { name, region: "TW" };
-        }
+// 🎯 US 必须匹配 Geo 才算
+if (unlocked.includes("US") && geoHint === "US") {
+  return { name, region: "US" };
+}
 
-        // 🎯 JP / KR
-        if (unlocked.includes("JP")) return { name, region: "JP" };
-        if (unlocked.includes("KR")) return { name, region: "KR" };
-
-        // fallback
-        return { name, region: unlocked[0] };
-      }
+// fallback
+return { name, region: unlocked[0] };
 
       // 非奈飞平台检测逻辑（保留原有）
       const res = await ctx.http.get(url, {
