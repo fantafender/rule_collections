@@ -1,5 +1,5 @@
 /**
- * 📌  更新了迪士尼解锁
+ * 📌  修了乱码
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
@@ -322,114 +322,68 @@ export default async function(ctx) {
     }
   }
 
-    // ...existing code...
-    // ===================== ChatGPT 检测（按 checkref2.MediaUnlockTest_ChatGPT 思路，输出仅 ❌ / APP / 地区码）=====================
-    async function checkChatGPT(ctx) {
-      try {
-        // 1) 访问 chatgpt.com 取响应头（看是否有 Location，代表 Web 访问是否可用）
-        const headRes = await ctx.http.get("https://chatgpt.com", {
-          timeout: 10000,
-          headers: { "User-Agent": BASE_UA },
-          followRedirect: false
-        }).catch(() => null);
-        const headOk = !!headRes;
-        const locationHeader = (headRes?.headers?.location || headRes?.headers?.Location || "");
-        const webAccessible = headOk && !!locationHeader;
+  // ===================== ChatGPT 检测（按 checkref2.MediaUnlockTest_ChatGPT 思路，输出仅 ❌ / APP / 地区码）=====================
+  async function checkChatGPT(ctx) {
+    try {
+      // 1) 访问 chatgpt.com 取响应头（看是否有 Location，代表 Web 访问是否可用）
+      const headRes = await ctx.http.get("https://chatgpt.com", {
+        timeout: 10000,
+        headers: { "User-Agent": BASE_UA },
+        followRedirect: false
+      }).catch(() => null);
+      const headOk = !!headRes;
+      const locationHeader = (headRes?.headers?.location || headRes?.headers?.Location || "");
+      const webAccessible = headOk && !!locationHeader;
   
-        // 2) 访问 ios.chat.openai.com 拿正文和 cf_details（代表 APP 接口是否可用）
-        const iosRes = await ctx.http.get("https://ios.chat.openai.com", {
-          timeout: 10000,
+      // 2) 访问 ios.chat.openai.com 拿正文和 cf_details（代表 APP 接口是否可用）
+      const iosRes = await ctx.http.get("https://ios.chat.openai.com", {
+        timeout: 10000,
+        headers: { "User-Agent": BASE_UA },
+        followRedirect: true
+      }).catch(() => null);
+      const iosBody = await readBody(iosRes);
+  
+      // 解析 cf_details（可能在 JSON 或内嵌脚本）
+      let cfDetails = "";
+      try {
+        const asJson = iosBody ? JSON.parse(iosBody) : null;
+        if (asJson && asJson.cf_details) cfDetails = String(asJson.cf_details);
+      } catch {
+        const m = iosBody ? iosBody.match(/"cf_details"\s*:\s*"([^"]*)"/) : null;
+        if (m?.[1]) cfDetails = m[1];
+      }
+  
+      // 识别 APP 是否被屏蔽（常见的 blocked / unsupported 字样 或 cf_details 标记）
+      const appBlocked = !iosBody
+        || iosBody.includes("blocked_why_headline")
+        || iosBody.includes("unsupported_country_region_territory")
+        || cfDetails.includes("(1)")
+        || cfDetails.includes("(2)");
+      const appAccessible = !!iosBody && !appBlocked;
+  
+      // 3) 三类输出决定逻辑：
+      // - 两者都不可用 => ❌
+      if (!webAccessible && !appAccessible) return "❌";
+      // - 仅 APP 可用 => APP
+      if (appAccessible && !webAccessible) return "APP";
+      // - 两者都可用 => 返回地区码（优先用 Cloudflare trace）
+      if (webAccessible && appAccessible) {
+        const traceRes = await ctx.http.get("https://chatgpt.com/cdn-cgi/trace", {
+          timeout: 8000,
           headers: { "User-Agent": BASE_UA },
           followRedirect: true
         }).catch(() => null);
-        const iosBody = await readBody(iosRes);
-  
-        // 解析 cf_details（可能在 JSON 或内嵌脚本）
-        let cfDetails = "";
-        try {
-          const asJson = iosBody ? JSON.parse(iosBody) : null;
-          if (asJson && asJson.cf_details) cfDetails = String(asJson.cf_details);
-        } catch {
-          const m = iosBody ? iosBody.match(/"cf_details"\s*:\s*"([^"]*)"/) : null;
-          if (m?.[1]) cfDetails = m[1];
+        const traceTxt = await readBody(traceRes);
+        if (traceTxt) {
+          const m = traceTxt.match(/loc=([A-Z]{2})/);
+          if (m?.[1]) return m[1];
         }
-  
-        // 识别 APP 是否被屏蔽（常见的 blocked / unsupported 字样 或 cf_details 标记）
-        const appBlocked = !iosBody
-          || iosBody.includes("blocked_why_headline")
-          || iosBody.includes("unsupported_country_region_territory")
-          || cfDetails.includes("(1)")
-          || cfDetails.includes("(2)");
-        const appAccessible = !!iosBody && !appBlocked;
-  
-        // 3) 三类输出决定逻辑：
-        // - 两者都不可用 => ❌
-        if (!webAccessible && !appAccessible) return "❌";
-        // - 仅 APP 可用 => APP
-        if (appAccessible && !webAccessible) return "APP";
-        // - 两者都可用 => 返回地区码（优先用 Cloudflare trace）
-        if (webAccessible && appAccessible) {
-          const traceRes = await ctx.http.get("https://chatgpt.com/cdn-cgi/trace", {
-            timeout: 8000,
-            headers: { "User-Agent": BASE_UA },
-            followRedirect: true
-          }).catch(() => null);
-          const traceTxt = await readBody(traceRes);
-          if (traceTxt) {
-            const m = traceTxt.match(/loc=([A-Z]{2})/);
-            if (m?.[1]) return m[1];
-          }
-          // Trace 失败时仍返回 XX 表示未知地区（界面按需显示 OK/XX）
-          return "XX";
-        }
-  
-        // 兜底
-        return "❌";
-      } catch {
-        return "❌";
+        // Trace 失败时仍返回 XX 表示未知地区（界面按需显示 OK/XX）
+        return "XX";
       }
-    }
-    // ...existing code...
-      const hostname = "netflix.com";
-      const [ips1, ips2, ips3] = await Promise.all([
-        dohResolveA(ctx, hostname, "cloudflare"),
-        dohResolveA(ctx, hostname, "google"),
-        dohResolveA(ctx, hostname, "quad9")
-      ]);
-      // 目前 UI 只展示 countryCode/🍿/❌，这里仍保留计算以便后续扩展
-      getUnlockTypeFromDns(ips1, ips2, ips3);
-
-      // 2) 并发请求两条 title（贴近 curl -fsL：跟随重定向，拿到 body）
-      const [r1, r2] = await Promise.all(
-        NETFLIX_TITLES.map(u =>
-          ctx.http.get(u, {
-            timeout: 6000,
-            headers: { "User-Agent": BASE_UA },
-            followRedirect: true
-          }).catch(() => ({ status: 0, body: "" }))
-        )
-      );
-
-      const [body1, body2] = await Promise.all([readBody(r1), readBody(r2)]);
-      // 如果两次都完全没有正文，基本可视为网络/环境拦截（比如 TLS/连接失败）
-      if (!body1 && !body2) return "❌";
-
-      const region = extractNetflixRegion(body1, body2, geoHint);
-      const ohNo1 = body1.includes("Oh no!");
-      const ohNo2 = body2.includes("Oh no!");
-
-      // 3) 判定逻辑完全按 reference1：
-      // - 两个都出现 Oh no! -> org
-      // - 只要有一个没出现 Oh no! -> yes
-      if (ohNo1 && ohNo2) return "🍿";
-      if (!ohNo1 || !ohNo2) {
-        const r = (region || "").toUpperCase();
-        // 兜底用 XX，但 UI 显示 OK
-        return r && r !== "XX" ? r : "OK";
-      }
-      // 兜底：如果走到这里，说明正文存在但不包含 Oh no! 字样且判断落空
-      // 这类情况更接近“可访问但无法解析地区”，按 OK 处理避免误报 ❌
-      return "OK";
+  
+      // 兜底
+      return "❌";
     } catch {
       return "❌";
     }
@@ -620,89 +574,93 @@ export default async function(ctx) {
   // 执行解锁检测（传入geoHint）
   const unlockResults = await Promise.all([
     checkPlatform("GPT", "https://chatgpt.com/auth/login", false, geoHint),
-    checkPlatform("奈飞", "", true, geoHint), // 奈飞无需传url，isNetflix=true即可
-    checkPlatform("TikTok", "https://www.tiktok.com/", false, geoHint),
-  const unlockResults = await Promise.all([
-    checkPlatform("GPT", "https://chatgpt.com/auth/login", false, geoHint),
-    checkPlatform("Gemini", "https://gemini.google.com/app", false, geoHint), // 奈飞无需传url，isNetflix=true即可
-    checkPlatform("Disney", "https://www.disneyplus.com", false, geoHint)
-  ]);int),
-  const unlockText = unlockResults.map(r => `${r.name} ${r.region}`).join("，");t)
+    checkPlatform("Gemini", "https://gemini.google.com/app", false, geoHint),
+    checkPlatform("Disney", "https://www.disneyplus.com", false, geoHint),
+    checkPlatform("奈飞", "", true, geoHint),
+    checkPlatform("TikTok", "https://www.tiktok.com/", false, geoHint)
+  ]);
 
-  // 风险评分（保留原有）("，");
-  const risk = baseInfo.ipData.fraudScore;
-  let riskTxt = "检测失败", riskColor = C_SUB; 
-  if (typeof risk === "number") {  const risk = baseInfo.ipData.fraudScore;
-    if (risk < 30) { "检测失败", riskColor = C_SUB; 
-      riskTxt = `极高纯净 (${risk})`;
+  const unlockText = (unlockResults || []).map(r => `${r.name} ${r.region}`).join("，");
+
+  // 风险评分处理（兼容缺失值）
+  const fraudScore = Number(baseInfo.ipData?.fraudScore);
+  let riskTxt = "检测失败", riskColor = getThemeColor(C_SUB);
+  if (!Number.isNaN(fraudScore)) {
+    if (fraudScore < 30) {
+      riskTxt = `极高纯净 (${fraudScore})`;
       riskColor = C_GREEN;
-    } else if (risk < 60) {
-      riskTxt = `中等风险 (${risk})`;GREEN;
+    } else if (fraudScore < 60) {
+      riskTxt = `中等风险 (${fraudScore})`;
       riskColor = C_YELLOW;
-    } else {isk})`;
-      riskTxt = `高风险警告 (${risk})`;
+    } else {
+      riskTxt = `高风险警告 (${fraudScore})`;
       riskColor = C_RED;
-    }isk})`;
-  }lor = C_RED;
+    }
+  }
 
-  // IP类型判断（保留原有）
-  const ipType = baseInfo.ipData.isResidential === true ? "🏠 住宅" 
-    : baseInfo.ipData.isResidential === false ? "🏢 机房" / IP类型判断（保留原有）
-    : getIPType(baseInfo.pubIsp, baseInfo.asnInfo);  const ipType = baseInfo.ipData.isResidential === true ? "🏠 住宅" 
-Data.isResidential === false ? "🏢 机房" 
-  // 延迟颜色（保留原有）
+  // IP类型判断（保底）
+  const ipType = (typeof baseInfo.ipData?.isResidential === "boolean")
+    ? (baseInfo.ipData.isResidential === true ? "🏠 住宅" : "🏢 机房")
+    : getIPType(baseInfo.pubIsp, baseInfo.asnInfo);
+
+  // 延迟颜色与文本
   let delayColor = C_SUB;
   if (baseInfo.realTcpDelay > 0) {
-    if (baseInfo.realTcpDelay < 150) delayColor = C_GREEN;  let delayColor = C_SUB;
-    else if (baseInfo.realTcpDelay <= 350) delayColor = C_YELLOW;realTcpDelay > 0) {
-    else delayColor = C_RED;elay < 150) delayColor = C_GREEN;
-  } else if (baseInfo.apiResponseTime > 0) { <= 350) delayColor = C_YELLOW;
+    if (baseInfo.realTcpDelay < 150) delayColor = C_GREEN;
+    else if (baseInfo.realTcpDelay <= 350) delayColor = C_YELLOW;
+    else delayColor = C_RED;
+  } else if (baseInfo.apiResponseTime > 0) {
     if (baseInfo.apiResponseTime < 150) delayColor = C_GREEN;
     else if (baseInfo.apiResponseTime <= 350) delayColor = C_YELLOW;
-    else delayColor = C_RED;Time < 150) delayColor = C_GREEN;
-  }) delayColor = C_YELLOW;
+    else delayColor = C_RED;
+  }
 
-  // 延迟文本（保留原有）
-  const delayText = baseInfo.realTcpDelay > 0 
-    ? `${baseInfo.realTcpDelay}ms (网络RTT) / ${baseInfo.apiResponseTime || "—"}ms (接口)`/ 延迟文本（保留原有）
-    : `${baseInfo.apiResponseTime || "—"}ms (接口)`;  const delayText = baseInfo.realTcpDelay > 0 
-fo.realTcpDelay}ms (网络RTT) / ${baseInfo.apiResponseTime || "—"}ms (接口)`
-  // UI 组件（保留原有）口)`;
-  const Row = (ic, icCol, label, val, valCol) => ({
-    type: "stack", direction: "row", alignItems: "center", padding: [3, 0],
-    children: [  const Row = (ic, icCol, label, val, valCol) => ({
-      { type: "image", src: `sf-symbol:${ic}`, color: getThemeColor(icCol), width: 12, height: 12 },", direction: "row", alignItems: "center", padding: [3, 0],
-      { type: "spacer", length: 5 },
-      { type: "text", text: label, font: { size: 10 }, textColor: getThemeColor(C_SUB) }, width: 12, height: 12 },
-      { type: "spacer" },spacer", length: 5 },
-      { type: "text", text: val, font: { size: 10, weight: "medium" }, textColor: getThemeColor(valCol), maxLines: 1 }
-    ]
-  });eColor(valCol), maxLines: 1 }
+  const delayText = baseInfo.realTcpDelay > 0
+    ? `${baseInfo.realTcpDelay}ms (网络RTT) / ${baseInfo.apiResponseTime || "—"}ms (接口)`
+    : `${baseInfo.apiResponseTime || "—"}ms (接口)`;
 
-  // 最终返回（保留原有）
-  return {
-    type: "widget",最终返回（保留原有）
-    padding: [8, 10],  return {
-    backgroundColor: getThemeColor(BG_CARD),et",
-    cornerRadius: 12,g: [8, 10],
-    refreshPolicy: { onNetworkChange: true, onEnter: true, timeout: 10 },: getThemeColor(BG_CARD),
+  // UI 行构建函数
+  const Row = (icon, iconColor, label, val, valColor) => ({
+    type: "stack",
+    direction: "row",
+    alignItems: "center",
+    padding: [3, 0],
     children: [
-      {onEnter: true, timeout: 10 },
-        type: "stack", direction: "row", alignItems: "center", padding: [2, 0, 4, 0],
+      { type: "image", src: `sf-symbol:${icon}`, color: getThemeColor(iconColor), width: 12, height: 12 },
+      { type: "spacer", length: 5 },
+      { type: "text", text: label, font: { size: 10 }, textColor: getThemeColor(C_SUB) },
+      { type: "spacer" },
+      { type: "text", text: val, font: { size: 10, weight: "medium" }, textColor: getThemeColor(valColor), maxLines: 1 }
+    ]
+  });
+
+  // 最终返回 widget（修复损坏的对象结构）
+  return {
+    type: "widget",
+    padding: [8, 10],
+    backgroundColor: getThemeColor(BG_CARD),
+    cornerRadius: 12,
+    refreshPolicy: { onNetworkChange: true, onEnter: true, timeout: 10 },
+    children: [
+      {
+        type: "stack",
+        direction: "row",
+        alignItems: "center",
+        padding: [2, 0, 4, 0],
         children: [
-          { type: "image", src: `sf-symbol:${netIcon}`, color: getThemeColor(C_BLUE), width:14, height:14 },stack", direction: "row", alignItems: "center", padding: [2, 0, 4, 0],
-          { type: "spacer", length:5 }, children: [
-          { type: "text", text: netName, font: { size:13, weight:"semibold" }, textColor: getThemeColor(C_TEXT) }, width:14, height:14 },
-          { type: "spacer" },spacer", length:5 },
-          { type: "text", text: delayText, font: { size:10, weight:"medium" }, textColor: getThemeColor(delayColor) }XT) },
+          { type: "image", src: `sf-symbol:${netIcon}`, color: getThemeColor(C_BLUE), width: 14, height: 14 },
+          { type: "spacer", length: 5 },
+          { type: "text", text: netName, font: { size: 13, weight: "semibold" }, textColor: getThemeColor(C_TEXT) },
+          { type: "spacer" },
+          { type: "text", text: delayText, font: { size: 10, weight: "medium" }, textColor: getThemeColor(delayColor) }
         ]
-      },) }
+      },
       Row("globe", C_BLUE, "直连IP", `${baseInfo.pubIp} (${baseInfo.pubIsp})`, C_TEXT),
       Row("mappin", C_SUB, "位置", baseInfo.pubLoc, C_TEXT),
-      Row("paperplane.fill", C_BLUE, "落地IP", `${baseInfo.nIp} ${ipType}`, C_TEXT),("globe", C_BLUE, "直连IP", `${baseInfo.pubIp} (${baseInfo.pubIsp})`, C_TEXT),
-      Row("mappin", C_SUB, "落地地区", baseInfo.nLoc, C_TEXT), // ✅ 已去emojiw("mappin", C_SUB, "位置", baseInfo.pubLoc, C_TEXT),
+      Row("paperplane.fill", C_BLUE, "落地IP", `${baseInfo.nIp} ${ipType}`, C_TEXT),
+      Row("mappin", C_SUB, "落地地区", baseInfo.nLoc, C_TEXT),
       Row("number.square.fill", C_SUB, "ASN", baseInfo.asnInfo, C_TEXT),
-      Row("shield.fill", riskColor, "风险评分", riskTxt, riskColor), // ✅ 已去emoji
+      Row("shield.fill", riskColor, "风险评分", riskTxt, riskColor),
       Row("play.tv.fill", C_BLUE, "解锁检测", unlockText, C_TEXT)
     ]
   };
