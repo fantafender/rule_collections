@@ -641,9 +641,9 @@ async function fetchBaseInfo(globalStart) {
   // 执行解锁检测（传入geoHint）
   const unlockResults = await Promise.all([
     checkPlatform("GPT", "https://chatgpt.com/auth/login", false, geoHint),
+    checkPlatform("Gemini", "https://gemini.google.com/app", false, geoHint),
     checkPlatform("奈飞", "", true, geoHint), // 奈飞无需传url，isNetflix=true即可
     checkPlatform("TikTok", "https://www.tiktok.com/", false, geoHint),
-    checkPlatform("Gemini", "https://gemini.google.com/app", false, geoHint),
     checkPlatform("Disney", "https://www.disneyplus.com", false, geoHint)
   ]);
   const unlockText = unlockResults.map(r => `${r.name} ${r.region}`).join("，");
