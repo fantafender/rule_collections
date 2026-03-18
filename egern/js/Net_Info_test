@@ -1,5 +1,5 @@
 /**
- * 📌  更新了迪士尼解锁
+ * 📌  奈飞逻辑修正
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
@@ -187,53 +187,47 @@ export default async function(ctx) {
     "Referer": "https://www.google.com/"
   };
 
+  async function checkNetflix(ctx) {
+    const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
+
+    try {
+      // 1. 同时请求：版权剧(ID:81280792) 和 自制剧(ID:70143836)
+      const [res1, res2] = await Promise.all([
+        ctx.http.get("https://www.netflix.com/title/81280792", { timeout: 3500, headers: { "User-Agent": UA }, followRedirect: false }).catch(() => ({ status: 0 })),
+        ctx.http.get("https://www.netflix.com/title/70143836", { timeout: 3500, headers: { "User-Agent": UA }, followRedirect: false }).catch(() => ({ status: 0 }))
+      ]);
+
+      // 2. 尝试从自制剧源码提取地区 ID (对应 Bash 的 sed 逻辑)
+      const regionMatch = res2.body?.match(/"countryCode":"?([A-Z]{2})"?/) || res2.body?.match(/"id":"?([A-Z]{2})"?/);
+      const region = regionMatch ? regionMatch[1] : "";
+
+      // 3. 核心判定
+      if (res1.status === 200) {
+        // ✅ 版权剧通了 = 全解锁
+        return region || "YES";
+      }
+
+      if (res2.status === 200) {
+        // ⚠️ 只有自制剧能看，或者版权剧被 302/404
+        return "🍿";
+      }
+
+      // ❌ 全都不行
+      return "❌";
+    } catch (e) {
+      return "❌";
+    }
+  }
+
   // 统一解锁检测函数
   const checkPlatform = async (name, url, isNetflix = false, geoHint = "XX") => {
     try {
       const isAI = name === "GPT" || name === "Gemini";
       
-      // 奈飞专属多区域检测逻辑（✅ 核心整合）
+      // 奈飞解锁检测逻辑（✅ Bash风格）
       if (isNetflix) {
-        const tests = [
-          { region: "US", id: "80018499" },
-          { region: "JP", id: "70143836" },
-          { region: "TW", id: "81215567" },
-          { region: "KR", id: "80192098" }
-        ];
-
-        const unlocked = [];
-
-        await Promise.all(tests.map(async (t) => {
-          try {
-            const res = await ctx.http.get(`https://www.netflix.com/title/${t.id}`, {
-              timeout: 3500,
-              headers: commonHeaders,
-              followRedirect: false
-            });
-
-            // ✅ Bash风格：只认真实可访问内容
-            if (res.status === 200 && !res.url?.includes("notavailable")) {
-              unlocked.push(t.region);
-            }
-          } catch (e) {}
-        }));
-
-        if (unlocked.length === 0) {
-          return { name, region: "❌" };
-        }
-
-        // ✅ 优先级（亚洲优先，避免假US）
-        const priority = ["TW", "JP", "KR", "US"];
-
-        for (const p of priority) {
-          if (unlocked.includes(p)) {
-            // ✅ US必须匹配Geo（核心修复）
-            if (p === "US" && geoHint !== "US") continue;
-            return { name, region: p };
-          }
-        }
-
-        return { name, region: unlocked[0] };
+        const region = await checkNetflix(ctx);
+        return { name, region };
       }
 
       // 非奈飞平台检测逻辑（保留原有）
