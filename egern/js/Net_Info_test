@@ -59,7 +59,7 @@ export default async function(ctx) {
 
   const DEFAULT_ISP = "未知运营商";
 
-  // ===================== 国旗 =====================
+  // ===================== 国旗（保留原逻辑，仅nLoc去emoji）=====================
   function getFlagFromIPIP(locArr) {
     const country = locArr[0] || "";
     const map = {
@@ -77,7 +77,7 @@ export default async function(ctx) {
     return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt()));
   }
 
-  // ===================== 🔥 新增：获取物理出口（用于奈飞精准修正）=====================
+  // ===================== 🔥 获取物理出口（用于奈飞GeoIP融合）=====================
   async function getPhysicalLoc() {
     try {
       const res = await ctx.http.get("https://1.1.1.1/cdn-cgi/trace", { timeout: 2500 });
@@ -88,67 +88,189 @@ export default async function(ctx) {
     }
   }
 
+  // ===================== 🔥 新增：整合基础IP信息获取函数 =====================
+  async function fetchBaseInfo(globalStart) {
+    // 初始化返回数据
+    const baseInfo = {
+      realTcpDelay: 0,
+      apiResponseTime: 0,
+      ipData: {},
+      pubIp: "—",
+      pubLoc: "—",
+      pubIsp: DEFAULT_ISP,
+      pubASN: "",
+      nIp: "—",
+      nLoc: "—",
+      asnInfo: "—",
+      ipinfoCountry: "", // ✅ 新增：ipinfo国家码
+      countryCode: "XX"  // 解锁检测用国家码
+    };
+
+    // 1. 网络 RTT（HTTPS 真实延迟）
+    const pingTask = ctx.http.get("https://1.1.1.1/cdn-cgi/trace", { timeout: 2500 })
+      .then(() => { baseInfo.realTcpDelay = Date.now() - globalStart; })
+      .catch(() => { baseInfo.realTcpDelay = 0; });
+
+    // 2. 接口延迟（剔除 JSON 解析）
+    const ippureTask = ctx.http.get("https://my.ippure.com/v1/info", { timeout: 5000 })
+      .then(async (res) => {
+        const t0 = Date.now();
+        baseInfo.ipData = await res.json();
+        const parseTime = Date.now() - t0;
+        baseInfo.apiResponseTime = (Date.now() - globalStart) - parseTime;
+      })
+      .catch(() => { baseInfo.apiResponseTime = 0; });
+
+    // 3. 其他IP信息
+    const ipipPromise = ctx.http.get("https://myip.ipip.net/json", {
+      headers: { "User-Agent": "Mozilla/5.0" }, timeout: 5000
+    }).catch(() => null);
+
+    const ipinfoPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 })
+      .catch(() => null);
+
+    // 并行执行
+    const [_, __, ipipResRaw, ipinfoResRaw] = await Promise.all([
+      pingTask,
+      ippureTask,
+      ipipPromise,
+      ipinfoPromise
+    ]);
+
+    // 解析ipip数据
+    if (ipipResRaw) {
+      try {
+        const body = await ipipResRaw.json();
+        if (body?.data) {
+          baseInfo.pubIp = body.data.ip || "—";
+          if (baseInfo.pubIp) {
+            baseInfo.pubASN = await ctx.http.get(`https://ipapi.co/${baseInfo.pubIp}/asn/`, { timeout: 3000 })
+              .then(r => r.text().then(t => t.trim())).catch(() => "");
+          }
+          const locArr = Array.isArray(body.data.location) 
+            ? body.data.location 
+            : (body.data.location || "").split(" ").filter(Boolean);
+          baseInfo.pubIsp = getISPByASN(baseInfo.pubASN) || getISPByIPIP(locArr[4] || locArr[3] || "", locArr) || DEFAULT_ISP;
+          const flag = getFlagFromIPIP(locArr);
+          baseInfo.pubLoc = `${flag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
+        }
+      } catch (e) {}
+    }
+
+    // 解析ipinfo数据（✅ 重点修改：新增ipinfoCountry + 去emoji）
+    if (ipinfoResRaw) {
+      try {
+        const dt = await ipinfoResRaw.json();
+        baseInfo.nIp = dt.ip || "—";
+        // ✅ 核心：新增ipinfoCountry变量
+        baseInfo.ipinfoCountry = (dt.country || "").toUpperCase();
+        // ✅ 去emoji依赖：nLoc不再拼接flag
+        baseInfo.nLoc = `${dt.region || ""} ${dt.city || ""}`.trim() || "—";
+        baseInfo.asnInfo = dt.org || "—";
+        // 赋值给解锁检测用的countryCode
+        baseInfo.countryCode = baseInfo.ipinfoCountry || "XX";
+      } catch (e) {}
+    }
+
+    return baseInfo;
+  }
+
   // ===================== 🔥 解锁检测核心逻辑 =====================
   const BASE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
-  let countryCode = "XX"; // 落地IP国家码，用于解锁检测
+  // 通用请求头（整合到变量，方便复用）
+  const commonHeaders = {
+    "User-Agent": BASE_UA,
+    "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
+    "Referer": "https://www.google.com/"
+  };
 
   // 统一解锁检测函数
-  const checkPlatform = async (name, url, isNetflix = false) => {
+  const checkPlatform = async (name, url, isNetflix = false, geoHint = "XX") => {
     try {
       const isAI = name === "GPT" || name === "Gemini";
+      
+      // 奈飞专属多区域检测逻辑（✅ 核心整合）
+      if (isNetflix) {
+        // 1️⃣ 多片库检测（内容层）
+        const tests = [
+          { region: "US", id: "80018499" },
+          { region: "JP", id: "70143836" },
+          { region: "TW", id: "81215567" },
+          { region: "KR", id: "80192098" }
+        ];
+
+        const unlocked = [];
+
+        await Promise.all(tests.map(async (t) => {
+          try {
+            const res = await ctx.http.get(`https://www.netflix.com/title/${t.id}`, {
+              timeout: 3500,
+              headers: commonHeaders,
+              followRedirect: false
+            });
+            if (res.status === 200) {
+              unlocked.push(t.region);
+            }
+          } catch {}
+        }));
+
+        // 2️⃣ 决策逻辑（核心）
+        if (unlocked.length === 0) {
+          return { name, region: "❌" };
+        }
+
+        // 🎯 US优先（最大库）
+        if (unlocked.includes("US")) {
+          return { name, region: "US" };
+        }
+
+        // 🎯 关键：HK / TW 分辨
+        if (unlocked.includes("TW")) {
+          // 如果Geo倾向HK/SG，但内容是TW → 判定TW解锁
+          if (geoHint === "HK" || geoHint === "SG") {
+            return { name, region: "TW" };
+          }
+          return { name, region: "TW" };
+        }
+
+        // 🎯 JP / KR
+        if (unlocked.includes("JP")) return { name, region: "JP" };
+        if (unlocked.includes("KR")) return { name, region: "KR" };
+
+        // fallback
+        return { name, region: unlocked[0] };
+      }
+
+      // 非奈飞平台检测逻辑（保留原有）
       const res = await ctx.http.get(url, {
         timeout: 4500,
-        headers: { 
-          "User-Agent": BASE_UA, 
-          "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
-          "Referer": "https://www.google.com/" 
-        },
+        headers: commonHeaders,
         followRedirect: isAI ? true : false
       });
 
-      // ===================== 只在这里强化 奈飞 =====================
-      if (isNetflix) {
-        let region = "❌";
-        if (res.status === 200) {
-          const reg = res.headers["x-netflix-originating-env"] || res.headers["X-Netflix-Originating-Env"];
-          region = reg ? reg.toUpperCase() : countryCode;
-        } else {
-          const res2 = await ctx.http.get("https://www.netflix.com/title/81215567", { timeout: 3000 });
-          region = res2.status === 200 ? "🍿" : "❌";
-        }
-
-        // 物理出口修正（最关键提升）
-        const physLoc = await getPhysicalLoc();
-        if (physLoc && region !== "❌" && region !== "🍿") {
-          region = physLoc; // 用真实出口覆盖，更准
-        }
-
-        return { name, region };
-      }
-
-      // 2. Disney+ 专项逻辑 (welcome页面 + 关键词过滤)
+      // Disney+ 专项逻辑
       if (name === "Disney") {
         const dsRes = await ctx.http.get("https://www.disneyplus.com/welcome/", {
           timeout: 5000,
-          headers: { "User-Agent": BASE_UA, "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8" },
+          headers: commonHeaders,
           followRedirect: true
         });
         const dsUrl = dsRes.url || "";
         const isBlocked = dsUrl.includes("unsupported") || dsUrl.includes("preview") || dsUrl.includes("coming-soon");
-        return { name, region: isBlocked ? "❌" : countryCode };
+        return { name, region: isBlocked ? "❌" : geoHint };
       }
 
-      // 3. AI/其他平台关键词过滤逻辑
+      // AI/其他平台关键词过滤逻辑
       const finalUrl = res.url || "";
       const isBlocked = finalUrl.includes("unsupported") || finalUrl.includes("error") || finalUrl.includes("preview");
       
       // GPT 特殊判定：302 到登录页也算 OK
       if (name === "GPT") {
-        if (res.status === 200 || res.status === 302) return { name, region: countryCode };
+        if (res.status === 200 || res.status === 302) return { name, region: geoHint };
       }
 
       if (res.status === 200 && !isBlocked) {
-        return { name, region: countryCode };
+        return { name, region: geoHint };
       }
       return { name, region: "❌" };
     } catch (e) {
@@ -156,7 +278,8 @@ export default async function(ctx) {
     }
   };
 
-  // ===================== 基础网络信息 =====================
+  // ===================== 主逻辑 =====================
+  // 基础网络信息
   const d = ctx.device || {};
   const isWifi = !!d.wifi?.ssid;
   let netName = "未连接", netIcon = "antenna.radiowaves.left.and.right";
@@ -169,88 +292,28 @@ export default async function(ctx) {
     netName = `蜂窝: ${map[r] || r || "5G"}`;
   }
 
-  // ===================== 🔥 科学计时：独立内部计时 =====================
+  // 科学计时：独立内部计时
   const globalStart = Date.now();
 
-  // 1. 网络 RTT（HTTPS 真实延迟）
-  let realTcpDelay = 0;
-  const pingTask = ctx.http.get("https://1.1.1.1/cdn-cgi/trace", { timeout: 2500 })
-    .then(() => { realTcpDelay = Date.now() - globalStart; })
-    .catch(() => { realTcpDelay = 0; });
+  // 获取基础IP信息（调用新增的fetchBaseInfo函数）
+  const baseInfo = await fetchBaseInfo(globalStart);
+  // 获取物理出口（GeoHint）
+  const realPhysicalRegion = await getPhysicalLoc();
+  // 确定GeoHint（ipinfoCountry优先，物理出口兜底）
+  const geoHint = baseInfo.ipinfoCountry || realPhysicalRegion || "XX";
 
-  // 2. 接口延迟（剔除 JSON 解析）
-  let ipData = {}, apiResponseTime = 0;
-  const ippureTask = ctx.http.get("https://my.ippure.com/v1/info", { timeout: 5000 })
-    .then(async (res) => {
-      const t0 = Date.now();
-      ipData = await res.json();
-      const parseTime = Date.now() - t0;
-      apiResponseTime = (Date.now() - globalStart) - parseTime;
-    })
-    .catch(() => { apiResponseTime = 0; });
-
-  // 3. 其他信息
-  const ipipPromise = ctx.http.get("https://myip.ipip.net/json", {
-    headers: { "User-Agent": "Mozilla/5.0" }, timeout: 5000
-  }).catch(() => null);
-
-  const ipinfoPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 })
-    .catch(() => null);
-
-  // 并行执行
-  const [_, __, ipipResRaw, ipinfoResRaw] = await Promise.all([
-    pingTask,
-    ippureTask,
-    ipipPromise,
-    ipinfoPromise
-  ]);
-
-  // ===================== 解析 IP =====================
-  let pubIp = "—", pubLoc = "—", pubIsp = DEFAULT_ISP, pubASN = "";
-  if (ipipResRaw) {
-    try {
-      const body = await ipipResRaw.json();
-      if (body?.data) {
-        pubIp = body.data.ip || "—";
-        if (pubIp) {
-          pubASN = await ctx.http.get(`https://ipapi.co/${pubIp}/asn/`, { timeout: 3000 })
-            .then(r => r.text().then(t => t.trim())).catch(() => "");
-        }
-        const locArr = Array.isArray(body.data.location) 
-          ? body.data.location 
-          : (body.data.location || "").split(" ").filter(Boolean);
-        pubIsp = getISPByASN(pubASN) || getISPByIPIP(locArr[4] || locArr[3] || "", locArr) || DEFAULT_ISP;
-        const flag = getFlagFromIPIP(locArr);
-        pubLoc = `${flag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
-      }
-    } catch (e) {}
-  }
-
-  let nIp = "—", nLoc = "—", asnInfo = "—";
-  if (ipinfoResRaw) {
-    try {
-      const dt = await ipinfoResRaw.json();
-      nIp = dt.ip || "—";
-      countryCode = (dt.country || "XX").toUpperCase(); // 赋值给解锁检测用的国家码
-      const code = dt.country || "";
-      const flag = code ? String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) : "🌐";
-      nLoc = `${flag} ${dt.region || ""} ${dt.city || ""}`.trim() || "—";
-      asnInfo = dt.org || "—";
-    } catch (e) {}
-  }
-
-  // ===================== 执行解锁检测 =====================
+  // 执行解锁检测（传入geoHint）
   const unlockResults = await Promise.all([
-    checkPlatform("GPT", "https://chatgpt.com/auth/login"),
-    checkPlatform("奈飞", "https://www.netflix.com/title/80018499", true),
-    checkPlatform("TikTok", "https://www.tiktok.com/"),
-    checkPlatform("Gemini", "https://gemini.google.com/app"),
-    checkPlatform("Disney", "https://www.disneyplus.com")
+    checkPlatform("GPT", "https://chatgpt.com/auth/login", false, geoHint),
+    checkPlatform("奈飞", "", true, geoHint), // 奈飞无需传url，isNetflix=true即可
+    checkPlatform("TikTok", "https://www.tiktok.com/", false, geoHint),
+    checkPlatform("Gemini", "https://gemini.google.com/app", false, geoHint),
+    checkPlatform("Disney", "https://www.disneyplus.com", false, geoHint)
   ]);
   const unlockText = unlockResults.map(r => `${r.name} ${r.region}`).join("，");
 
-  // ===================== 风险评分（优化版：视觉+健壮性+暗色适配） =====================
-  const risk = ipData.fraudScore;
+  // 风险评分（保留原有）
+  const risk = baseInfo.ipData.fraudScore;
   let riskTxt = "检测失败", riskColor = C_SUB; 
   if (typeof risk === "number") {
     if (risk < 30) {
@@ -265,28 +328,29 @@ export default async function(ctx) {
     }
   }
 
-  const ipType = ipData.isResidential === true ? "🏠 住宅" 
-    : ipData.isResidential === false ? "🏢 机房" 
-    : getIPType(pubIsp, asnInfo);
+  // IP类型判断（保留原有）
+  const ipType = baseInfo.ipData.isResidential === true ? "🏠 住宅" 
+    : baseInfo.ipData.isResidential === false ? "🏢 机房" 
+    : getIPType(baseInfo.pubIsp, baseInfo.asnInfo);
 
-  // ===================== 延迟颜色（适配暗色模式）=====================
+  // 延迟颜色（保留原有）
   let delayColor = C_SUB;
-  if (realTcpDelay > 0) {
-    if (realTcpDelay < 150) delayColor = C_GREEN;
-    else if (realTcpDelay <= 350) delayColor = C_YELLOW;
+  if (baseInfo.realTcpDelay > 0) {
+    if (baseInfo.realTcpDelay < 150) delayColor = C_GREEN;
+    else if (baseInfo.realTcpDelay <= 350) delayColor = C_YELLOW;
     else delayColor = C_RED;
-  } else if (apiResponseTime > 0) {
-    if (apiResponseTime < 150) delayColor = C_GREEN;
-    else if (apiResponseTime <= 350) delayColor = C_YELLOW;
+  } else if (baseInfo.apiResponseTime > 0) {
+    if (baseInfo.apiResponseTime < 150) delayColor = C_GREEN;
+    else if (baseInfo.apiResponseTime <= 350) delayColor = C_YELLOW;
     else delayColor = C_RED;
   }
 
-  // ===================== 延迟文本（保留网络RTT/接口字段）=====================
-  const delayText = realTcpDelay > 0 
-    ? `${realTcpDelay}ms (网络RTT) / ${apiResponseTime || "—"}ms (接口)`
-    : `${apiResponseTime || "—"}ms (接口)`;
+  // 延迟文本（保留原有）
+  const delayText = baseInfo.realTcpDelay > 0 
+    ? `${baseInfo.realTcpDelay}ms (网络RTT) / ${baseInfo.apiResponseTime || "—"}ms (接口)`
+    : `${baseInfo.apiResponseTime || "—"}ms (接口)`;
 
-  // ===================== UI 组件（优化视觉一致性）=====================
+  // UI 组件（保留原有）
   const Row = (ic, icCol, label, val, valCol) => ({
     type: "stack", direction: "row", alignItems: "center", padding: [3, 0],
     children: [
@@ -298,7 +362,7 @@ export default async function(ctx) {
     ]
   });
 
-  // ===================== 最终返回（适配暗色模式）=====================
+  // 最终返回（保留原有）
   return {
     type: "widget",
     padding: [8, 10],
@@ -316,11 +380,11 @@ export default async function(ctx) {
           { type: "text", text: delayText, font: { size:10, weight:"medium" }, textColor: getThemeColor(delayColor) }
         ]
       },
-      Row("globe", C_BLUE, "直连IP", `${pubIp} (${pubIsp})`, C_TEXT),
-      Row("mappin", C_SUB, "位置", pubLoc, C_TEXT),
-      Row("paperplane.fill", C_BLUE, "落地IP", `${nIp} ${ipType}`, C_TEXT),
-      Row("mappin", C_SUB, "落地地区", nLoc, C_TEXT),
-      Row("number.square.fill", C_SUB, "ASN", asnInfo, C_TEXT),
+      Row("globe", C_BLUE, "直连IP", `${baseInfo.pubIp} (${baseInfo.pubIsp})`, C_TEXT),
+      Row("mappin", C_SUB, "位置", baseInfo.pubLoc, C_TEXT),
+      Row("paperplane.fill", C_BLUE, "落地IP", `${baseInfo.nIp} ${ipType}`, C_TEXT),
+      Row("mappin", C_SUB, "落地地区", baseInfo.nLoc, C_TEXT), // ✅ 已去emoji
+      Row("number.square.fill", C_SUB, "ASN", baseInfo.asnInfo, C_TEXT),
       Row("shield.fill", riskColor, "风险评分", riskTxt, riskColor),
       Row("play.tv.fill", C_BLUE, "解锁检测", unlockText, C_TEXT)
     ]
