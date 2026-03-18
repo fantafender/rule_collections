@@ -17,9 +17,9 @@ export default async function (ctx) {
     return Math.round(b) + 'B';
   };
 
-  // 🇺🇳 国家代码 → 国旗
+  // 🇺🇳 国旗
   function countryToFlag(cc) {
-    if (!cc || cc.length !== 2) return '🌐';
+    if (!cc || cc.length !== 2 || cc === '??') return '🌐';
     return cc.toUpperCase().replace(/./g, c =>
       String.fromCodePoint(127397 + c.charCodeAt())
     );
@@ -41,18 +41,11 @@ export default async function (ctx) {
     }
   }
 
-  // 🔐 SSH
   async function fetchServer(id) {
     const prefix = `vps${id}_`;
     const host = ctx.env[prefix + 'host'];
 
-    if (!host) {
-      return { name: `VPS${id}`, error: 'NO CFG' };
-    }
-
-    const cacheKey = `_cache_${id}`;
-    const cache = ctx.storage.getJSON(cacheKey);
-    if (cache && Date.now() - cache.ts < 15000) return cache.data;
+    if (!host) return { name: `VPS${id}`, error: 'NO CFG' };
 
     try {
       const privateKey = ctx.env[prefix + 'key'];
@@ -67,13 +60,15 @@ export default async function (ctx) {
       });
 
       const SEP = '<<SEP>>';
+
       const cmds = [
         'hostname -s',
-        'cat /proc/loadavg',
-        'head -1 /proc/stat',
+        'top -bn1 | grep "Cpu(s)"',
         'free -b | grep Mem',
         'df -B1 / | tail -1',
-        "awk '/^(eth|en|ens|eno)/{rx+=$2;tx+=$10}END{print rx,tx}' /proc/net/dev"
+        "awk '/^(eth|en|ens|eno)/{rx+=$2;tx+=$10}END{print rx,tx}' /proc/net/dev",
+        'cat /proc/loadavg',
+        'curl -s ifconfig.me'
       ];
 
       const { stdout } = await session.exec(cmds.join(` && echo "${SEP}" && `));
@@ -82,55 +77,53 @@ export default async function (ctx) {
       const p = stdout.split(SEP).map(s => s.trim());
       const now = Date.now();
 
-      // CPU
-      const cpuNums = p[2].replace(/^cpu\s+/, '').split(/\s+/).map(Number);
-      const total = cpuNums.reduce((a, b) => a + b, 0);
-      const idle = cpuNums[3];
+      // ✅ CPU（实时）
+      const cpuMatch = p[1].match(/(\d+\.\d+)\s*id/);
+      const cpu = cpuMatch ? Math.round(100 - parseFloat(cpuMatch[1])) : 0;
 
-      const prev = ctx.storage.getJSON(`_cpu_${id}`);
-      let cpu = 0;
-      if (prev && total > prev.t) {
-        cpu = Math.round((1 - (idle - prev.i) / (total - prev.t)) * 100);
-      }
-      ctx.storage.setJSON(`_cpu_${id}`, { t: total, i: idle });
+      // ✅ MEM（稳定）
+      const m = p[2].split(/\s+/);
+      const total = Number(m[1]);
+      const used = Number(m[2]);
+      const mem = total > 0 ? Math.round((used / total) * 100) : 0;
 
-      // MEM
-      const m = p[3].split(/\s+/);
-      const mem = m[1] ? Math.round((Number(m[2]) / Number(m[1])) * 100) : 0;
+      // ✅ DISK（兼容所有系统）
+      const d = p[3].split(/\s+/);
+      const disk = parseInt(d.find(x => x.includes('%')) || '0');
 
-      // DISK
-      const d = p[4].split(/\s+/);
-      const disk = parseInt(d[4]) || 0;
+      // ✅ NET（修复不动问题）
+      const [rx, tx] = p[4].split(' ').map(Number);
+      const prev = ctx.storage.getJSON(`_net_${id}`);
 
-      // NET
-      const [rx, tx] = p[5].split(' ').map(Number);
-      const prevNet = ctx.storage.getJSON(`_net_${id}`);
       let rxR = 0, txR = 0;
 
-      if (prevNet && now > prevNet.ts) {
-        const dt = (now - prevNet.ts) / 1000;
-        if (dt > 0 && dt < 3600) {
-          rxR = Math.max(0, (rx - prevNet.rx) / dt);
-          txR = Math.max(0, (tx - prevNet.tx) / dt);
+      if (prev) {
+        const dt = (now - prev.ts) / 1000;
+        if (dt >= 1 && dt < 600) {
+          rxR = (rx - prev.rx) / dt;
+          txR = (tx - prev.tx) / dt;
+
+          if (rxR <= 0) rxR = prev.rxR || 0;
+          if (txR <= 0) txR = prev.txR || 0;
         }
       }
-      ctx.storage.setJSON(`_net_${id}`, { rx, tx, ts: now });
 
-      const geo = await getGeo(host);
+      ctx.storage.setJSON(`_net_${id}`, { rx, tx, ts: now, rxR, txR });
 
-      const data = {
+      // ✅ 公网 IP → 国旗
+      const publicIP = p[6]?.trim();
+      const geo = await getGeo(publicIP);
+
+      return {
         name: p[0] || host,
-        cpu: Math.max(0, cpu),
+        cpu,
         mem,
         disk,
         rxR,
         txR,
-        load: p[1].split(' ')[0],
+        load: p[5].split(' ')[0],
         country: geo.country
       };
-
-      ctx.storage.setJSON(cacheKey, { ts: now, data });
-      return data;
 
     } catch (e) {
       return {
@@ -140,7 +133,7 @@ export default async function (ctx) {
     }
   }
 
-  // 🚀 并发执行（关键优化）
+  // 🚀 并发
   const servers = await Promise.all([
     fetchServer(1),
     fetchServer(2),
@@ -153,10 +146,10 @@ export default async function (ctx) {
     height: 4,
     borderRadius: 2,
     backgroundColor: C.barBg,
-    children: pct > 0 ? [
-      { type: 'stack', flex: Math.max(1, pct), backgroundColor: color, borderRadius: 2 },
-      ...(pct < 100 ? [{ type: 'spacer', flex: 100 - pct }] : [])
-    ] : [{ type: 'spacer' }]
+    children: [
+      { type: 'stack', flex: Math.max(1, pct), backgroundColor: color },
+      { type: 'spacer', flex: 100 - Math.min(pct, 100) }
+    ]
   });
 
   const card = (s) => ({
@@ -189,7 +182,7 @@ export default async function (ctx) {
         bar(s.disk, pctColor(s.disk)),
 
         { type: 'text', text: `↓${fmt(s.rxR)} ↑${fmt(s.txR)}`, font: { size: 10, family: 'Menlo' }, textColor: C.net },
-        { type: 'text', text: `LOAD ${s.load}`, font: { size: 9, family: 'Menlo' }, textColor: C.dim }
+        { type: 'text', text: `LOAD ${s.load}`, font: { size: 9 }, textColor: C.dim }
       ])
     ]
   });
