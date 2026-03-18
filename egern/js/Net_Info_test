@@ -1,5 +1,5 @@
 /**
- * 📌  奈飞逻辑修正
+ * 📌  奈飞 地区码/🍿/X。取不到地区码显示OK
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
@@ -187,34 +187,116 @@ export default async function(ctx) {
     "Referer": "https://www.google.com/"
   };
 
-  async function checkNetflix(ctx) {
-    const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
+  // ===================== Netflix 检测（按 reference1 思路：DNS + Oh no!）=====================
+  const NETFLIX_TITLES = [
+    "https://www.netflix.com/title/81280792", // 版权剧（常用于检测全解锁）
+    "https://www.netflix.com/title/70143836"  // 自制剧
+  ];
+
+  const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
+
+  async function dohResolveA(ctx, hostname, provider) {
+    // 使用 DNS-over-HTTPS 获取 A 记录，尽量贴近 reference1 的多路 DNS 思路
+    // provider: cloudflare | google | quad9
+    const endpoints = {
+      cloudflare: `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=A`,
+      google: `https://dns.google/resolve?name=${encodeURIComponent(hostname)}&type=A`,
+      quad9: `https://dns.quad9.net/dns-query?name=${encodeURIComponent(hostname)}&type=A`
+    };
+    const url = endpoints[provider];
+    if (!url) return [];
 
     try {
-      // 1. 同时请求：版权剧(ID:81280792) 和 自制剧(ID:70143836)
-      const [res1, res2] = await Promise.all([
-        ctx.http.get("https://www.netflix.com/title/81280792", { timeout: 3500, headers: { "User-Agent": UA }, followRedirect: false }).catch(() => ({ status: 0 })),
-        ctx.http.get("https://www.netflix.com/title/70143836", { timeout: 3500, headers: { "User-Agent": UA }, followRedirect: false }).catch(() => ({ status: 0 }))
+      const res = await ctx.http.get(url, {
+        timeout: 2500,
+        headers: {
+          "Accept": "application/dns-json",
+          "User-Agent": BASE_UA
+        },
+        followRedirect: true
+      });
+      const data = typeof res?.json === "function" ? await res.json() : null;
+      const answers = data?.Answer || data?.answer || [];
+      const ips = (answers || [])
+        .filter(a => a && (a.type === 1 || a.type === "A") && typeof a.data === "string")
+        .map(a => a.data);
+      return uniq(ips);
+    } catch {
+      return [];
+    }
+  }
+
+  function getUnlockTypeFromDns(ips1, ips2, ips3) {
+    // 这是 JS 版的“Get_Unlock_Type”简化实现：
+    // - 三路 DNS 返回一致：大概率原生
+    // - 存在明显差异：可能 DNS 解锁/污染/分流
+    const a = uniq(ips1).sort().join(",");
+    const b = uniq(ips2).sort().join(",");
+    const c = uniq(ips3).sort().join(",");
+    if (!a && !b && !c) return "DNS未知";
+    if (a && a === b && a === c) return "原生DNS";
+    // 只要有两路一致也算“较稳定”，否则认为差异明显
+    const sameAB = a && b && a === b;
+    const sameAC = a && c && a === c;
+    const sameBC = b && c && b === c;
+    if (sameAB || sameAC || sameBC) return "疑似分流";
+    return "疑似DNS解锁";
+  }
+
+  function extractNetflixRegion(body1, body2, geoHint = "XX") {
+    const bodies = [body1, body2].filter(Boolean);
+    for (const b of bodies) {
+      // 尽量兼容不同页面结构：countryCode / id + countryName
+      const m1 = b.match(/"countryCode"\s*:\s*"?([A-Z]{2})"?/);
+      if (m1?.[1]) return m1[1];
+      const m2 = b.match(/"id"\s*:\s*"?([A-Z]{2})"?.{0,200}?"countryName"\s*:\s*"/);
+      if (m2?.[1]) return m2[1];
+    }
+    return (geoHint || "XX").toUpperCase();
+  }
+
+  async function checkNetflix(ctx, geoHint = "XX") {
+    try {
+      // 1) DNS 多路解析 -> unlockType
+      const hostname = "netflix.com";
+      const [ips1, ips2, ips3] = await Promise.all([
+        dohResolveA(ctx, hostname, "cloudflare"),
+        dohResolveA(ctx, hostname, "google"),
+        dohResolveA(ctx, hostname, "quad9")
       ]);
+      // 目前 UI 只展示 countryCode/🍿/❌，这里仍保留计算以便后续扩展
+      getUnlockTypeFromDns(ips1, ips2, ips3);
 
-      // 2. 尝试从自制剧源码提取地区 ID (对应 Bash 的 sed 逻辑)
-      const regionMatch = res2.body?.match(/"countryCode":"?([A-Z]{2})"?/) || res2.body?.match(/"id":"?([A-Z]{2})"?/);
-      const region = regionMatch ? regionMatch[1] : "";
+      // 2) 并发请求两条 title（贴近 curl -fsL：跟随重定向，拿到 body）
+      const [r1, r2] = await Promise.all(
+        NETFLIX_TITLES.map(u =>
+          ctx.http.get(u, {
+            timeout: 6000,
+            headers: { "User-Agent": BASE_UA },
+            followRedirect: true
+          }).catch(() => ({ status: 0, body: "" }))
+        )
+      );
 
-      // 3. 核心判定
-      if (res1.status === 200) {
-        // ✅ 版权剧通了 = 全解锁
-        return region || "YES";
+      const body1 = r1?.body || "";
+      const body2 = r2?.body || "";
+      if (!body1 || !body2) return "❌";
+
+      const region = extractNetflixRegion(body1, body2, geoHint);
+      const ohNo1 = body1.includes("Oh no!");
+      const ohNo2 = body2.includes("Oh no!");
+
+      // 3) 判定逻辑完全按 reference1：
+      // - 两个都出现 Oh no! -> org
+      // - 只要有一个没出现 Oh no! -> yes
+      if (ohNo1 && ohNo2) return "🍿";
+      if (!ohNo1 || !ohNo2) {
+        const r = (region || "").toUpperCase();
+        // 兜底用 XX，但 UI 显示 OK
+        return r && r !== "XX" ? r : "OK";
       }
-
-      if (res2.status === 200) {
-        // ⚠️ 只有自制剧能看，或者版权剧被 302/404
-        return "🍿";
-      }
-
-      // ❌ 全都不行
       return "❌";
-    } catch (e) {
+    } catch {
       return "❌";
     }
   }
@@ -226,8 +308,8 @@ export default async function(ctx) {
       
       // 奈飞解锁检测逻辑（✅ Bash风格）
       if (isNetflix) {
-        const region = await checkNetflix(ctx);
-        return { name, region };
+        const resultText = await checkNetflix(ctx, geoHint);
+        return { name, region: resultText };
       }
 
       // 非奈飞平台检测逻辑（保留原有）
