@@ -1,5 +1,5 @@
 /**
- * 📌  修正了GPT的验证逻辑，参考了 https://github.com/xykt/IPQuality IP质量检测脚本
+ * 📌  测试GPT的解锁逻辑，参考了 https://github.com/xykt/IPQuality IP质量检测脚本
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
