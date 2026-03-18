@@ -194,7 +194,6 @@ export default async function(ctx) {
       
       // 奈飞专属多区域检测逻辑（✅ 核心整合）
       if (isNetflix) {
-        // 1️⃣ 多片库检测（内容层）
         const tests = [
           { region: "US", id: "80018499" },
           { region: "JP", id: "70143836" },
@@ -211,28 +210,31 @@ export default async function(ctx) {
               headers: commonHeaders,
               followRedirect: false
             });
-            if (res.status === 200) {
+
+            // ✅ Bash风格：只认真实可访问内容
+            if (res.status === 200 && !res.url?.includes("notavailable")) {
               unlocked.push(t.region);
             }
-          } catch {}
+          } catch (e) {}
         }));
 
-if (unlocked.length === 0) {
-  return { name, region: "❌" };
-}
+        if (unlocked.length === 0) {
+          return { name, region: "❌" };
+        }
 
-// 🎯 高可信区域优先
-if (unlocked.includes("TW")) return { name, region: "TW" };
-if (unlocked.includes("JP")) return { name, region: "JP" };
-if (unlocked.includes("KR")) return { name, region: "KR" };
+        // ✅ 优先级（亚洲优先，避免假US）
+        const priority = ["TW", "JP", "KR", "US"];
 
-// 🎯 US 必须匹配 Geo 才算
-if (unlocked.includes("US") && geoHint === "US") {
-  return { name, region: "US" };
-}
+        for (const p of priority) {
+          if (unlocked.includes(p)) {
+            // ✅ US必须匹配Geo（核心修复）
+            if (p === "US" && geoHint !== "US") continue;
+            return { name, region: p };
+          }
+        }
 
-// fallback
-return { name, region: unlocked[0] };
+        return { name, region: unlocked[0] };
+      }
 
       // 非奈飞平台检测逻辑（保留原有）
       const res = await ctx.http.get(url, {
