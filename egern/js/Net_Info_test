@@ -1,5 +1,5 @@
 /**
- * 📌  加回了落地国旗
+ * 📌  修了迪士尼解锁
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
@@ -370,6 +370,115 @@ export default async function(ctx) {
     }
   }
 
+  // ===================== Disney+ 检测（完全按 reference1 Bash 版思路）=====================
+  const DISNEY_BEARER = "Bearer ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84";
+  const DISNEY_DEVICES_URL = "https://disney.api.edge.bamgrid.com/devices";
+  const DISNEY_TOKEN_URL = "https://disney.api.edge.bamgrid.com/token";
+  const DISNEY_GQL_URL = "https://disney.api.edge.bamgrid.com/graph/v1/device/graphql";
+  const DISNEY_COOKIES_PRIMARY = "https://github.com/xykt/IPQuality/raw/main/ref/cookies.txt";
+  const DISNEY_COOKIES_FALLBACK = "https://testingcf.jsdelivr.net/gh/xykt/IPQuality@main/ref/cookies.txt";
+
+  async function fetchDisneyCookieTemplates(ctx) {
+    const fetchText = async (u) => {
+      const r = await ctx.http.get(u, { timeout: 6000, headers: { "User-Agent": BASE_UA }, followRedirect: true }).catch(() => null);
+      const t = await readBody(r);
+      return (t || "").trim();
+    };
+    const txt = (await fetchText(DISNEY_COOKIES_PRIMARY)) || (await fetchText(DISNEY_COOKIES_FALLBACK));
+    if (!txt) return null;
+    const lines = txt.split(/\r?\n/);
+    // Bash: 第 1 行用于 /token（含 DISNEYASSERTION 占位符），第 8 行用于 GraphQL（含 ILOVEDISNEY 占位符）
+    const tokenTpl = (lines[0] || "").trim();
+    const gqlTpl = (lines[7] || "").trim();
+    if (!tokenTpl || !gqlTpl) return null;
+    return { tokenTpl, gqlTpl };
+  }
+
+  async function checkDisneyPlusFull(ctx) {
+    try {
+      const templates = await fetchDisneyCookieTemplates(ctx);
+      if (!templates) return "❌";
+
+      // 1) /devices -> assertion
+      const pre = await ctx.http.post(DISNEY_DEVICES_URL, {
+        timeout: 10000,
+        headers: {
+          "authorization": DISNEY_BEARER,
+          "content-type": "application/json; charset=UTF-8",
+          "user-agent": BASE_UA
+        },
+        body: JSON.stringify({
+          deviceFamily: "browser",
+          applicationRuntime: "chrome",
+          deviceProfile: "windows",
+          attributes: {}
+        }),
+        followRedirect: true
+      }).catch(() => null);
+      const preJson = pre ? await pre.json().catch(() => null) : null;
+      const assertion = preJson?.assertion;
+      if (!assertion) return "❌";
+
+      // 2) /token -> refresh_token
+      const tokenBody = templates.tokenTpl.replace(/DISNEYASSERTION/g, assertion);
+      const tokRes = await ctx.http.post(DISNEY_TOKEN_URL, {
+        timeout: 10000,
+        headers: {
+          "authorization": DISNEY_BEARER,
+          // 参考 Bash：不显式给 content-type，这里按表单提交更接近 curl -d 行为
+          "content-type": "application/x-www-form-urlencoded",
+          "user-agent": BASE_UA
+        },
+        body: tokenBody,
+        followRedirect: true
+      }).catch(() => null);
+
+      const tokText = await readBody(tokRes);
+      // Bash: forbidden-location / 403 ERROR => no
+      if (tokText.includes("forbidden-location") || tokText.includes("403 ERROR")) return "❌";
+      const tokJson = tokText ? JSON.parse(tokText) : null;
+      const refreshToken = tokJson?.refresh_token;
+      if (!refreshToken) return "❌";
+
+      // 3) GraphQL -> region + inSupportedLocation
+      const gqlBody = templates.gqlTpl.replace(/ILOVEDISNEY/g, refreshToken);
+      const gqlRes = await ctx.http.post(DISNEY_GQL_URL, {
+        timeout: 10000,
+        headers: {
+          "authorization": DISNEY_BEARER,
+          "content-type": "application/json; charset=UTF-8",
+          "user-agent": BASE_UA
+        },
+        body: gqlBody,
+        followRedirect: true
+      }).catch(() => null);
+      const gqlJson = gqlRes ? await gqlRes.json().catch(() => null) : null;
+      if (!gqlJson) return "❌";
+
+      const region = (gqlJson?.extensions?.sdk?.session?.location?.countryCode || "").toUpperCase();
+      const inSupportedLocation = gqlJson?.extensions?.sdk?.session?.inSupportedLocation;
+
+      // 4) preview/unavailable 检测（按 Bash：看最终 URL 是否含 preview + unavailable）
+      const webRes = await ctx.http.get("https://disneyplus.com", {
+        timeout: 10000,
+        headers: commonHeaders,
+        followRedirect: true
+      }).catch(() => null);
+      const finalUrl = webRes?.url || "";
+      const isUnavailable = finalUrl.includes("preview") && finalUrl.includes("unavailable");
+
+      // 5) 完全按 Bash 分支映射到 UI 文本
+      if (region === "JP") return "JP";
+      if (region && inSupportedLocation === false && !isUnavailable) return "⏳"; // pending
+      if (region && isUnavailable) return "❌";
+      if (region && inSupportedLocation === true) return region;
+      if (!region) return "❌";
+      return "❌";
+    } catch {
+      return "❌";
+    }
+  }
+
   // 统一解锁检测函数
   const checkPlatform = async (name, url, isNetflix = false, geoHint = "XX") => {
     try {
@@ -394,37 +503,10 @@ export default async function(ctx) {
         followRedirect: isAI ? true : false
       });
 
-      // Disney+ 专项逻辑
+      // Disney+ 专项逻辑（完全按 reference1 Bash 版）
       if (name === "Disney") {
-        try {
-          const res = await ctx.http.get("https://www.disneyplus.com/", {
-            timeout: 5000,
-            headers: commonHeaders,
-            followRedirect: true
-          });
-
-          const finalUrl = res.url || "";
-
-          // ❌ 明确被封锁
-          if (
-            finalUrl.includes("unavailable") ||
-            finalUrl.includes("preview") ||
-            finalUrl.includes("coming-soon") ||
-            finalUrl.includes("unsupported")
-          ) {
-            return { name, region: "❌" };
-          }
-
-          // ❌ Disney+ 常见封锁页特征
-          if (res.status !== 200) {
-            return { name, region: "❌" };
-          }
-
-          // ✅ 正常：按 Geo 判
-          return { name, region: geoHint };
-        } catch (e) {
-          return { name, region: "❌" };
-        }
+        const resultText = await checkDisneyPlusFull(ctx);
+        return { name, region: resultText };
       }
 
       // AI/其他平台关键词过滤逻辑
