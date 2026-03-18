@@ -1,3 +1,6 @@
+/**
+ * 📌  更新了奈飞解锁逻辑
+ */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
   const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
