@@ -1,5 +1,5 @@
 /**
- * 📌  修正了web端gpt的验证逻辑，参考了 https://github.com/xykt/IPQuality IP质量检测脚本
+ * 📌  ai踩冒烟，参考了 https://github.com/xykt/IPQuality IP质量检测脚本
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
@@ -204,6 +204,9 @@ async function fetchBaseInfo(globalStart) {
     "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
     "Referer": "https://www.google.com/"
   };
+  // 测试开关：开启后会在控制台输出额外调试信息，但不改变 Widget 的最终显示文本
+  // 将其设为 true 以启用测试日志；保持 false 或删除以禁用
+  const TEST_MODE = true;
 
   // ===================== Netflix 检测（按 reference1 思路：DNS + Oh no!）=====================
   const NETFLIX_TITLES = [
@@ -700,6 +703,19 @@ async function fetchBaseInfo(globalStart) {
     checkPlatform("Disney", "https://www.disneyplus.com", false, geoHint)
   ]);
   const unlockText = unlockResults.map(r => `${r.name} ${r.region}`).join("，");
+
+  // 测试模式输出：仅用于调试，不影响最终 Widget 文本
+  if (typeof TEST_MODE !== 'undefined' && TEST_MODE) {
+    try {
+      // console.log 在某些运行环境可能不可见，但保留以便测试时使用
+      console.log('TEST_MODE: baseInfo=', JSON.stringify(baseInfo || {}));
+      console.log('TEST_MODE: geoHint=', geoHint);
+      console.log('TEST_MODE: unlockResults=', JSON.stringify(unlockResults || []));
+      console.log('TEST_MODE: unlockText=', unlockText);
+    } catch (e) {
+      // 忽略任何序列化问题
+    }
+  }
 
   // 风险评分（保留原有）
   const risk = baseInfo.ipData.fraudScore;
