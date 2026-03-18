@@ -1,5 +1,5 @@
 /**
- * 📌  更新了奈飞解锁逻辑 修正解锁判断
+ * 📌  更新了迪士尼解锁
  */
 export default async function(ctx) {
   // ===================== 样式常量（light/dark 双模式）=====================
@@ -245,14 +245,35 @@ export default async function(ctx) {
 
       // Disney+ 专项逻辑
       if (name === "Disney") {
-        const dsRes = await ctx.http.get("https://www.disneyplus.com/welcome/", {
-          timeout: 5000,
-          headers: commonHeaders,
-          followRedirect: true
-        });
-        const dsUrl = dsRes.url || "";
-        const isBlocked = dsUrl.includes("unsupported") || dsUrl.includes("preview") || dsUrl.includes("coming-soon");
-        return { name, region: isBlocked ? "❌" : geoHint };
+        try {
+          const res = await ctx.http.get("https://www.disneyplus.com/", {
+            timeout: 5000,
+            headers: commonHeaders,
+            followRedirect: true
+          });
+
+          const finalUrl = res.url || "";
+
+          // ❌ 明确被封锁
+          if (
+            finalUrl.includes("unavailable") ||
+            finalUrl.includes("preview") ||
+            finalUrl.includes("coming-soon") ||
+            finalUrl.includes("unsupported")
+          ) {
+            return { name, region: "❌" };
+          }
+
+          // ❌ Disney+ 常见封锁页特征
+          if (res.status !== 200) {
+            return { name, region: "❌" };
+          }
+
+          // ✅ 正常：按 Geo 判
+          return { name, region: geoHint };
+        } catch (e) {
+          return { name, region: "❌" };
+        }
       }
 
       // AI/其他平台关键词过滤逻辑
