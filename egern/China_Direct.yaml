@@ -25,6 +25,15 @@ rules:
   - domain_suffix: { match: "meituan.com", policy: "DIRECT" }
   - domain_suffix: { match: "alipay.com", policy: "DIRECT" }
 
+    # Apple
+  - domain_suffix: { match: "icloud.com", policy: "DIRECT" }
+  - domain_suffix: { match: "icloud-content.com", policy: "DIRECT" }
+  - domain_suffix: { match: "me.com", policy: "DIRECT" }
+  - domain_suffix: { match: "apple.com", policy: "DIRECT" }
+  - domain_suffix: { match: "apple-cloudkit.com", policy: "DIRECT" }
+  - domain_suffix: { match: "apple-mapkit.com", policy: "DIRECT" }
+
+
   # Google 中国服务
   - domain_suffix: { match: "services.googleapis.cn", policy: "DIRECT" }
   - domain_suffix: { match: "xn--ngstr-lra8j.com", policy: "DIRECT" }
