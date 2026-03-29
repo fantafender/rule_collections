@@ -1,473 +1,414 @@
 /**
- * 📌  ai踩冒烟，参考了 https://github.com/xykt/IPQuality IP质量检测脚本
+ * 📌 Egern IP 质量 & 解锁检测 Widget — 优化版
+ *
+ * 优化内容：
+ *  1. 延迟测量独立打点，不再依赖 globalStart 偏移
+ *  2. 最大化并行：fetchBaseInfo / getPhysicalLoc / 解锁检测尽可能并行
+ *  3. 移除未使用的 DNS 多路查询代码（原来查了但丢弃结果）
+ *  4. Netflix: 增加 og:video 判定，区分全解锁 / 仅自制剧 / 受限
+ *  5. ChatGPT: 增加 "WEB" 中间状态（Web 可用但 APP 受限）
+ *  6. TikTok: 增加 store_region API 作为主要检测手段
+ *  7. Gemini: 修正正则，删除过于宽松的 fallback
+ *  8. Disney+: 修复 checkPlatform 里的冗余请求
+ *  9. 核心检测增加 1 次重试
+ * 10. 各处细节健壮性修复
  */
-export default async function(ctx) {
-  // ===================== 样式常量（light/dark 双模式）=====================
-  const BG_CARD = { light: '#FFFFFF', dark: '#1C1E1E' };
-  const C_TEXT  = { light: '#000000', dark: '#FFFFFF' };
-  const C_SUB   = { light: '#6E6E73', dark: '#8E8E93' };
-  const C_BLUE  = { light: '#007AFF', dark: '#0A84FF' };
-  const C_GREEN = { light: '#34C759', dark: '#30D158' };
-  const C_YELLOW= { light: '#FF9F0A', dark: '#FF9F0A' };
-  const C_RED   = { light: '#FF3B30', dark: '#FF453A' };
+export default async function (ctx) {
+  // ===================== 样式常量 =====================
+  const BG_CARD  = { light: '#FFFFFF', dark: '#1C1E1E' };
+  const C_TEXT   = { light: '#000000', dark: '#FFFFFF' };
+  const C_SUB    = { light: '#6E6E73', dark: '#8E8E93' };
+  const C_BLUE   = { light: '#007AFF', dark: '#0A84FF' };
+  const C_GREEN  = { light: '#34C759', dark: '#30D158' };
+  const C_YELLOW = { light: '#FF9F0A', dark: '#FF9F0A' };
+  const C_RED    = { light: '#FF3B30', dark: '#FF453A' };
 
-  // ===================== 辅助函数：获取系统主题适配的颜色 =====================
   const getThemeColor = (colorObj) => {
-    const isDarkMode = ctx?.device?.colorScheme === 'dark' || false;
-    return isDarkMode ? colorObj.dark : colorObj.light;
+    const isDark = ctx?.device?.colorScheme === 'dark' || false;
+    return isDark ? colorObj.dark : colorObj.light;
   };
 
-  // ===================== IP类型判断 =====================
+  // ===================== 通用 UA & Headers =====================
+  const BASE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
+  const commonHeaders = {
+    "User-Agent": BASE_UA,
+    "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
+    "Referer": "https://www.google.com/"
+  };
+
+  // ===================== 工具函数 =====================
+  const DEFAULT_ISP = "未知运营商";
+
+  // 已知国家码白名单（用于 Gemini 校验）
+  const KNOWN_COUNTRY_CODES = new Set([
+    "AD","AE","AF","AG","AI","AL","AM","AO","AR","AS","AT","AU","AW","AX","AZ",
+    "BA","BB","BD","BE","BF","BG","BH","BI","BJ","BL","BM","BN","BO","BR","BS",
+    "BT","BW","BY","BZ","CA","CC","CD","CF","CG","CH","CI","CK","CL","CM","CN",
+    "CO","CR","CU","CV","CW","CX","CY","CZ","DE","DJ","DK","DM","DO","DZ","EC",
+    "EE","EG","ER","ES","ET","FI","FJ","FK","FM","FO","FR","GA","GB","GD","GE",
+    "GF","GG","GH","GI","GL","GM","GN","GP","GQ","GR","GT","GU","GW","GY","HK",
+    "HN","HR","HT","HU","ID","IE","IL","IM","IN","IO","IQ","IR","IS","IT","JE",
+    "JM","JO","JP","KE","KG","KH","KI","KM","KN","KP","KR","KW","KY","KZ","LA",
+    "LB","LC","LI","LK","LR","LS","LT","LU","LV","LY","MA","MC","MD","ME","MF",
+    "MG","MH","MK","ML","MM","MN","MO","MP","MQ","MR","MS","MT","MU","MV","MW",
+    "MX","MY","MZ","NA","NC","NE","NF","NG","NI","NL","NO","NP","NR","NU","NZ",
+    "OM","PA","PE","PF","PG","PH","PK","PL","PM","PN","PR","PS","PT","PW","PY",
+    "QA","RE","RO","RS","RU","RW","SA","SB","SC","SD","SE","SG","SH","SI","SK",
+    "SL","SM","SN","SO","SR","SS","ST","SV","SX","SY","SZ","TC","TD","TF","TG",
+    "TH","TJ","TK","TL","TM","TN","TO","TR","TT","TV","TW","TZ","UA","UG","US",
+    "UY","UZ","VA","VC","VE","VG","VI","VN","VU","WF","WS","YE","YT","ZA","ZM","ZW"
+  ]);
+
+  /** 带重试的 GET 请求 */
+  async function httpGetRetry(url, opts = {}, retries = 1) {
+    for (let i = 0; i <= retries; i++) {
+      try {
+        return await ctx.http.get(url, opts);
+      } catch (e) {
+        if (i === retries) throw e;
+      }
+    }
+  }
+
+  /** 带重试的 POST 请求 */
+  async function httpPostRetry(url, opts = {}, retries = 1) {
+    for (let i = 0; i <= retries; i++) {
+      try {
+        return await ctx.http.post(url, opts);
+      } catch (e) {
+        if (i === retries) throw e;
+      }
+    }
+  }
+
+  /** 安全读取响应 body */
+  const readBody = async (r) => {
+    if (!r) return "";
+    if (typeof r.body === "string" && r.body.length) return r.body;
+    if (typeof r.text === "function") {
+      try { return (await r.text()) || ""; } catch { return ""; }
+    }
+    return "";
+  };
+
+  // ===================== IP 类型判断 =====================
   function getIPType(isp, org) {
     const raw = `${isp} ${org}`.toLowerCase();
-    if (raw.includes('residential') || raw.includes('consumer') || raw.includes('home') || 
-        raw.includes('住户') || raw.includes('家庭')) {
-      return "🏠 住宅";
-    }
-    if (raw.includes('datacenter') || raw.includes('hosting') || raw.includes('server') || 
-        raw.includes('机房') || raw.includes('数据中心')) {
-      return "🏢 机房";
-    }
-    if (raw.includes('mobile') || raw.includes('cellular') || raw.includes('移动') || raw.includes('蜂窝')) {
-      return "📶 移动";
-    }
+    if (/residential|consumer|home|住户|家庭/.test(raw)) return "🏠 住宅";
+    if (/datacenter|hosting|server|机房|数据中心/.test(raw)) return "🏢 机房";
+    if (/mobile|cellular|移动|蜂窝/.test(raw)) return "📶 移动";
     return "🌐 固定IP";
   }
 
   // ===================== 运营商识别 =====================
   function getISPByASN(asn) {
-    const asnCode = (asn || "").trim().replace(/^AS/, "");
-    switch (asnCode) {
-      case "9231": return "CMHK";
-      case "9381": return "CTHK";
-      case "4609": return "CTM";
-      default: return null;
-    }
+    const code = (asn || "").trim().replace(/^AS/, "");
+    const map = { "9231": "CMHK", "9381": "CTHK", "4609": "CTM" };
+    return map[code] || null;
   }
 
   function getISPByIPIP(rawIsp, locArr) {
     const s = (rawIsp || "").toLowerCase();
     const area1 = (locArr[1] || "").toLowerCase();
     if (area1.includes("香港")) {
-      if (s.includes("mobile") || s.includes("移动")) return "CMHK";
-      if (s.includes("telecom") || s.includes("电信")) return "CTHK";
+      if (/mobile|移动/.test(s)) return "CMHK";
+      if (/telecom|电信/.test(s)) return "CTHK";
       return "香港运营商";
     }
     if (area1.includes("澳门")) return "CTM";
     if (/(移动|cmcc)/i.test(s)) return "中国移动";
     if (/(电信|chinanet)/i.test(s)) return "中国电信";
     if (/(联通|unicom)/i.test(s)) return "中国联通";
-    return "未知运营商";
+    return DEFAULT_ISP;
   }
 
-  const DEFAULT_ISP = "未知运营商";
-
-
-// ===================== 国旗（保留原逻辑，仅nLoc去emoji）=====================
-function getFlagFromIPIP(locArr) {
-  const country = locArr[0] || "";
-  const map = {
-    "中国": "CN", "日本": "JP", "美国": "US", "法国": "FR",
-    "德国": "DE", "新加坡": "SG", "英国": "GB", "韩国": "KR",
-    "加拿大": "CA", "澳大利亚": "AU", "荷兰": "NL"
-  };
-  let code = map[country];
-  if (!code) {
-    if (locArr[1]?.includes("香港")) code = "HK";
-    else if (locArr[1]?.includes("澳门")) code = "MO";
-    else if (locArr[1]?.includes("台湾")) code = "TW";
+  // ===================== 国旗工具 =====================
+  function codeToFlag(code) {
+    if (!code || code === "XX" || code.length !== 2 || !/^[A-Z]{2}$/.test(code)) return "🌐";
+    return String.fromCodePoint(...code.split('').map(c => 127397 + c.charCodeAt()));
   }
-  if (!code) return "🌐";
-  return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt()));
-}
 
-// ===================== 新增：根据国家码生成落地国旗 =====================
-function getFlagFromCountryCode(countryCode) {
-  if (!countryCode || countryCode === "XX") return "🌐";
-  const specialMap = {
-    "HK": "🇭🇰",
-    "MO": "🇲🇴",
-    "TW": "🇹🇼"
-  };
-  if (specialMap[countryCode]) return specialMap[countryCode];
-  if (countryCode.length === 2 && /^[A-Z]{2}$/.test(countryCode)) {
-    return String.fromCodePoint(...countryCode.split('').map(c => 127397 + c.charCodeAt()));
+  function getFlagFromIPIP(locArr) {
+    const country = locArr[0] || "";
+    const map = {
+      "中国": "CN", "日本": "JP", "美国": "US", "法国": "FR",
+      "德国": "DE", "新加坡": "SG", "英国": "GB", "韩国": "KR",
+      "加拿大": "CA", "澳大利亚": "AU", "荷兰": "NL"
+    };
+    let code = map[country];
+    if (!code) {
+      if (locArr[1]?.includes("香港")) code = "HK";
+      else if (locArr[1]?.includes("澳门")) code = "MO";
+      else if (locArr[1]?.includes("台湾")) code = "TW";
+    }
+    return code ? codeToFlag(code) : "🌐";
   }
-  return "🌐";
-}
 
-// ===================== 🔥 获取物理出口（用于奈飞GeoIP融合）=====================
-async function getPhysicalLoc() {
-  try {
-    const res = await ctx.http.get("https://1.1.1.1/cdn-cgi/trace", { timeout: 2500 });
-    const match = res.body?.match(/loc=([A-Z]{2})/);
-    return match && match[1] !== "XX" ? match[1] : null;
-  } catch {
-    return null;
+  // ===================== 获取物理出口 =====================
+  async function getPhysicalLoc() {
+    try {
+      const res = await ctx.http.get("https://1.1.1.1/cdn-cgi/trace", { timeout: 2500 });
+      const m = res.body?.match(/loc=([A-Z]{2})/);
+      return m && m[1] !== "XX" ? m[1] : null;
+    } catch { return null; }
   }
-}
 
-// ===================== 🔥 新增：整合基础IP信息获取函数 =====================
-async function fetchBaseInfo(globalStart) {
-  // 初始化返回数据
-  const baseInfo = {
-    realTcpDelay: 0,
-    apiResponseTime: 0,
-    ipData: {},
-    pubIp: "—",
-    pubLoc: "—",
-    pubIsp: DEFAULT_ISP,
-    pubASN: "",
-    nIp: "—",
-    nLoc: "—",
-    asnInfo: "—",
-    ipinfoCountry: "", // ✅ 新增：ipinfo国家码
-    countryCode: "XX"  // 解锁检测用国家码
-  };
+  // ===================== 基础 IP 信息获取（优化并行） =====================
+  async function fetchBaseInfo() {
+    const baseInfo = {
+      realTcpDelay: 0,
+      apiResponseTime: 0,
+      ipData: {},
+      pubIp: "—", pubLoc: "—", pubIsp: DEFAULT_ISP, pubASN: "",
+      nIp: "—", nLoc: "—", asnInfo: "—",
+      ipinfoCountry: "", countryCode: "XX"
+    };
 
-  // 1. 网络 RTT（HTTPS 真实延迟）
-  const pingTask = ctx.http.get("https://1.1.1.1/cdn-cgi/trace", { timeout: 2500 })
-    .then(() => { baseInfo.realTcpDelay = Date.now() - globalStart; })
-    .catch(() => { baseInfo.realTcpDelay = 0; });
-
-  // 2. 接口延迟（剔除 JSON 解析）
-  const ippureTask = ctx.http.get("https://my.ippure.com/v1/info", { timeout: 5000 })
-    .then(async (res) => {
+    // 1) 网络 RTT —— 独立打点
+    const pingTask = (async () => {
       const t0 = Date.now();
-      baseInfo.ipData = await res.json();
-      const parseTime = Date.now() - t0;
-      baseInfo.apiResponseTime = (Date.now() - globalStart) - parseTime;
-    })
-    .catch(() => { baseInfo.apiResponseTime = 0; });
+      try {
+        await ctx.http.get("https://1.1.1.1/cdn-cgi/trace", { timeout: 2500 });
+        baseInfo.realTcpDelay = Date.now() - t0;
+      } catch { baseInfo.realTcpDelay = 0; }
+    })();
 
-  // 3. 其他IP信息
-  const ipipPromise = ctx.http.get("https://myip.ipip.net/json", {
-    headers: { "User-Agent": "Mozilla/5.0" }, timeout: 5000
-  }).catch(() => null);
+    // 2) ippure 风险评分接口 —— 独立打点
+    const ippureTask = (async () => {
+      const t0 = Date.now();
+      try {
+        const res = await ctx.http.get("https://my.ippure.com/v1/info", { timeout: 5000 });
+        baseInfo.ipData = await res.json();
+        baseInfo.apiResponseTime = Date.now() - t0;
+      } catch { baseInfo.apiResponseTime = 0; }
+    })();
 
-  const ipinfoPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 })
-    .catch(() => null);
+    // 3) ipip
+    const ipipPromise = ctx.http.get("https://myip.ipip.net/json", {
+      headers: { "User-Agent": "Mozilla/5.0" }, timeout: 5000
+    }).catch(() => null);
 
-  // 并行执行
-  const [_, __, ipipResRaw, ipinfoResRaw] = await Promise.all([
-    pingTask,
-    ippureTask,
-    ipipPromise,
-    ipinfoPromise
-  ]);
+    // 4) ipinfo
+    const ipinfoPromise = ctx.http.get("https://ipinfo.io/json", { timeout: 5000 }).catch(() => null);
 
-  // 解析ipip数据
-  if (ipipResRaw) {
-    try {
-      const body = await ipipResRaw.json();
-      if (body?.data) {
-        baseInfo.pubIp = body.data.ip || "—";
-        if (baseInfo.pubIp) {
-          baseInfo.pubASN = await ctx.http.get(`https://ipapi.co/${baseInfo.pubIp}/asn/`, { timeout: 3000 })
-            .then(r => r.text().then(t => t.trim())).catch(() => "");
+    // 并行执行所有
+    const [, , ipipRes, ipinfoRes] = await Promise.all([pingTask, ippureTask, ipipPromise, ipinfoPromise]);
+
+    // 解析 ipip + ASN（ASN 查询不再阻塞 ipip 解析主流程）
+    let pubIpForASN = null;
+    if (ipipRes) {
+      try {
+        const body = await ipipRes.json();
+        if (body?.data) {
+          baseInfo.pubIp = body.data.ip || "—";
+          pubIpForASN = baseInfo.pubIp;
+          const locArr = Array.isArray(body.data.location)
+            ? body.data.location
+            : (body.data.location || "").split(" ").filter(Boolean);
+          // 先用 ipip 信息识别 ISP（ASN 查询结果稍后覆盖）
+          baseInfo.pubIsp = getISPByIPIP(locArr[4] || locArr[3] || "", locArr) || DEFAULT_ISP;
+          baseInfo.pubLoc = `${getFlagFromIPIP(locArr)} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
+          // 保存 locArr 供 ASN 回来后重新判断
+          baseInfo._locArr = locArr;
         }
-        const locArr = Array.isArray(body.data.location) 
-          ? body.data.location 
-          : (body.data.location || "").split(" ").filter(Boolean);
-        baseInfo.pubIsp = getISPByASN(baseInfo.pubASN) || getISPByIPIP(locArr[4] || locArr[3] || "", locArr) || DEFAULT_ISP;
-        const flag = getFlagFromIPIP(locArr);
-        baseInfo.pubLoc = `${flag} ${locArr[1] || ""} ${locArr[2] || ""}`.trim() || "—";
-      }
-    } catch (e) {}
+      } catch {}
+    }
+
+    // 解析 ipinfo
+    if (ipinfoRes) {
+      try {
+        const dt = await ipinfoRes.json();
+        baseInfo.nIp = dt.ip || "—";
+        baseInfo.ipinfoCountry = (dt.country || "").toUpperCase();
+        const nFlag = codeToFlag(baseInfo.ipinfoCountry);
+        baseInfo.nLoc = `${nFlag} ${dt.region || ""} ${dt.city || ""}`.trim() || "—";
+        baseInfo.asnInfo = dt.org || "—";
+        baseInfo.countryCode = baseInfo.ipinfoCountry || "XX";
+      } catch {}
+    }
+
+    // ASN 查询（独立，不阻塞上面的解析）
+    if (pubIpForASN) {
+      try {
+        const asnRes = await ctx.http.get(`https://ipapi.co/${pubIpForASN}/asn/`, { timeout: 3000 });
+        baseInfo.pubASN = (await asnRes.text()).trim();
+        // 用 ASN 重新判断 ISP（优先级更高）
+        const ispByASN = getISPByASN(baseInfo.pubASN);
+        if (ispByASN) baseInfo.pubIsp = ispByASN;
+      } catch {}
+    }
+
+    return baseInfo;
   }
 
-  // 解析ipinfo数据（✅ 重点修改：新增ipinfoCountry + 加回落地国旗）
-  if (ipinfoResRaw) {
-    try {
-      const dt = await ipinfoResRaw.json();
-      baseInfo.nIp = dt.ip || "—";
-      // ✅ 核心：新增ipinfoCountry变量
-      baseInfo.ipinfoCountry = (dt.country || "").toUpperCase();
-      // ✅ 加回落地国旗：调用新增的国旗生成函数
-      const nFlag = getFlagFromCountryCode(baseInfo.ipinfoCountry);
-      // ✅ 拼接国旗+地区文本
-      baseInfo.nLoc = `${nFlag} ${dt.region || ""} ${dt.city || ""}`.trim() || "—";
-      baseInfo.asnInfo = dt.org || "—";
-      // 赋值给解锁检测用的countryCode
-      baseInfo.countryCode = baseInfo.ipinfoCountry || "XX";
-    } catch (e) {}
-  }
-
-  return baseInfo;
-}
-
-  // ===================== 🔥 解锁检测核心逻辑 =====================
-  const BASE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
-  // 通用请求头（整合到变量，方便复用）
-  const commonHeaders = {
-    "User-Agent": BASE_UA,
-    "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
-    "Referer": "https://www.google.com/"
-  };
-  // 测试开关：开启后会在控制台输出额外调试信息，但不改变 Widget 的最终显示文本
-  // 将其设为 true 以启用测试日志；保持 false 或删除以禁用
-  const TEST_MODE = true;
-
-  // ===================== Netflix 检测（按 reference1 思路：DNS + Oh no!）=====================
+  // ===================== Netflix 检测（优化：og:video + reactContext） =====================
   const NETFLIX_TITLES = [
-    "https://www.netflix.com/title/81280792", // 版权剧（常用于检测全解锁）
-    "https://www.netflix.com/title/70143836"  // 自制剧
+    "https://www.netflix.com/title/81280792",
+    "https://www.netflix.com/title/70143836"
   ];
 
-  const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
-
-  const readBody = async (r) => {
-    if (!r) return "";
-    if (typeof r.body === "string" && r.body.length) return r.body;
-    if (typeof r.text === "function") {
-      try {
-        const t = await r.text();
-        return typeof t === "string" ? t : "";
-      } catch {
-        return "";
-      }
-    }
-    return "";
-  };
-
-  async function dohResolveA(ctx, hostname, provider) {
-    // 使用 DNS-over-HTTPS 获取 A 记录，尽量贴近 reference1 的多路 DNS 思路
-    // provider: cloudflare | google | quad9
-    const endpoints = {
-      cloudflare: `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=A`,
-      google: `https://dns.google/resolve?name=${encodeURIComponent(hostname)}&type=A`,
-      quad9: `https://dns.quad9.net/dns-query?name=${encodeURIComponent(hostname)}&type=A`
-    };
-    const url = endpoints[provider];
-    if (!url) return [];
-
+  async function checkNetflix(geoHint) {
     try {
-      const res = await ctx.http.get(url, {
-        timeout: 2500,
-        headers: {
-          "Accept": "application/dns-json",
-          "User-Agent": BASE_UA
-        },
-        followRedirect: true
-      });
-      const data = typeof res?.json === "function" ? await res.json() : null;
-      const answers = data?.Answer || data?.answer || [];
-      const ips = (answers || [])
-        .filter(a => a && (a.type === 1 || a.type === "A") && typeof a.data === "string")
-        .map(a => a.data);
-      return uniq(ips);
-    } catch {
-      return [];
-    }
-  }
-
-  function getUnlockTypeFromDns(ips1, ips2, ips3) {
-    // 这是 JS 版的“Get_Unlock_Type”简化实现：
-    // - 三路 DNS 返回一致：大概率原生
-    // - 存在明显差异：可能 DNS 解锁/污染/分流
-    const a = uniq(ips1).sort().join(",");
-    const b = uniq(ips2).sort().join(",");
-    const c = uniq(ips3).sort().join(",");
-    if (!a && !b && !c) return "DNS未知";
-    if (a && a === b && a === c) return "原生DNS";
-    // 只要有两路一致也算“较稳定”，否则认为差异明显
-    const sameAB = a && b && a === b;
-    const sameAC = a && c && a === c;
-    const sameBC = b && c && b === c;
-    if (sameAB || sameAC || sameBC) return "疑似分流";
-    return "疑似DNS解锁";
-  }
-
-  function extractNetflixRegion(body1, body2, geoHint = "XX") {
-    const bodies = [body1, body2].filter(Boolean);
-    for (const b of bodies) {
-      // 尽量兼容不同页面结构：countryCode / id + countryName
-      const m1 = b.match(/"countryCode"\s*:\s*"?([A-Z]{2})"?/);
-      if (m1?.[1]) return m1[1];
-      const m2 = b.match(/"id"\s*:\s*"?([A-Z]{2})"?.{0,200}?"countryName"\s*:\s*"/);
-      if (m2?.[1]) return m2[1];
-    }
-    return (geoHint || "XX").toUpperCase();
-  }
-
-  // ===================== Netflix 检测函数（实现 Bash MediaUnlockTest_Netflix 逻辑）=====================
-  async function checkNetflix(ctx, geoHint = "XX") {
-    try {
-      // 1) 多路 DNS 查询（用于诊断，UI 目前只显示国家码/🍿/❌）
-      const host = "netflix.com";
-      await Promise.all([
-        dohResolveA(ctx, host, 'cloudflare'),
-        dohResolveA(ctx, host, 'google'),
-        dohResolveA(ctx, host, 'quad9')
-      ]).catch(() => []);
-
-      // 2) 并发拉取两条用于判定的 title 页面
       const fetchTitle = async (url) => {
-        const r = await ctx.http.get(url, {
-          timeout: 10000,
-          headers: { "User-Agent": BASE_UA },
-          followRedirect: true
-        }).catch(() => null);
-        const body = await readBody(r);
-        return { body: body || "", status: r?.status || 0, url: r?.url || url };
+        try {
+          const r = await httpGetRetry(url, {
+            timeout: 8000, headers: { "User-Agent": BASE_UA }, followRedirect: true
+          }, 1);
+          const body = await readBody(r);
+          return { body: body || "", status: r?.status || 0 };
+        } catch { return { body: "", status: 0 }; }
       };
 
       const [t1, t2] = await Promise.all([fetchTitle(NETFLIX_TITLES[0]), fetchTitle(NETFLIX_TITLES[1])]);
 
-      // 3) 若两条均为空，认为无数据/无法访问 -> ❌
       if (!t1.body && !t2.body) return "❌";
 
-      // 4) 提取地区（优先从页面内容解析，兜底使用 geoHint）
-      const region = (extractNetflixRegion(t1.body || "", t2.body || "", geoHint) || "XX").toUpperCase();
+      // 提取地区码（参考 Bash 脚本的 reactContext 方式）
+      let region = geoHint || "XX";
+      for (const body of [t1.body, t2.body]) {
+        if (!body) continue;
+        // 方式1: reactContext -> requestCountry.id
+        const mCtx = body.match(/"requestCountry"\s*:\s*\{[^}]*"id"\s*:\s*"([A-Z]{2})"/);
+        if (mCtx?.[1]) { region = mCtx[1]; break; }
+        // 方式2: countryCode 字段
+        const mCC = body.match(/"countryCode"\s*:\s*"?([A-Z]{2})"?/);
+        if (mCC?.[1]) { region = mCC[1]; break; }
+      }
+      region = region.toUpperCase();
 
-      // 5) 检测是否包含 "Oh no!"（受限标识）
+      // 检查 og:video（有 = 全解锁，无 = 仅自制剧）
+      const hasFullLib1 = t1.body && t1.body.includes('og:video');
+      const hasFullLib2 = t2.body && t2.body.includes('og:video');
+
+      // 检查 "Oh no!"（受限标识）
       const oh1 = t1.body && /oh no!/i.test(t1.body);
       const oh2 = t2.body && /oh no!/i.test(t2.body);
 
-      // 两条都出现 Oh no! -> 受限 -> 返回 🍿
+      // 两条都 Oh no! → 受限
       if (oh1 && oh2) return "🍿";
 
-      // 至少一条未出现 Oh no! -> 可用 -> 返回地区码（如 DE）
-      if (!oh1 || !oh2) return region || "XX";
+      // 有 og:video → 全解锁
+      if (hasFullLib1 || hasFullLib2) return region || "XX";
 
-      // 兜底
+      // 无 og:video 但未 Oh no! → 仅自制剧（用 🍿 + 地区标记）
+      if (region && region !== "XX") return `🍿${region}`;
+
       return "❌";
-    } catch (e) {
-      return "❌";
-    }
+    } catch { return "❌"; }
   }
 
-  // ===================== TikTok 检测（按 reference1 思路：region + Please wait... 兜底）=====================
-  async function checkTikTok(ctx) {
+  // ===================== TikTok 检测（增加 store_region API） =====================
+  async function checkTikTok() {
     try {
-      // reference1: 先拉主页，若遇到 "Please wait..." 再拉 /explore
-      const fetchOnce = async (url, extraHeaders = {}) => {
-        const r = await ctx.http.get(url, {
-          timeout: 6000,
-          headers: { "User-Agent": BASE_UA, ...extraHeaders },
-          followRedirect: true
-        }).catch(() => null);
-        const body = await readBody(r);
-        return { status: r?.status || 0, body };
-      };
-
-      const r1 = await fetchOnce("https://www.tiktok.com/");
-      let body1 = r1.body || "";
-      if (body1.includes("Please wait...")) {
-        const rExplore = await fetchOnce("https://www.tiktok.com/explore");
-        body1 = rExplore.body || body1;
+      // 优先：store_region API（更稳定）
+      const storeRes = await ctx.http.post("https://www.tiktok.com/passport/web/store_region/", {
+        timeout: 6000,
+        headers: { "User-Agent": BASE_UA },
+      }).catch(() => null);
+      if (storeRes) {
+        const storeBody = await readBody(storeRes);
+        try {
+          const storeJson = JSON.parse(storeBody);
+          const sr = storeJson?.data?.store_region;
+          if (sr) return sr.toUpperCase();
+        } catch {}
       }
 
-      // reference1: 从 HTML 中 grep '"region":' 抽取
+      // 回退：HTML 解析
+      const fetchOnce = async (url, extra = {}) => {
+        const r = await ctx.http.get(url, {
+          timeout: 6000, headers: { "User-Agent": BASE_UA, ...extra }, followRedirect: true
+        }).catch(() => null);
+        return await readBody(r);
+      };
+
+      let body1 = await fetchOnce("https://www.tiktok.com/");
+      if (body1.includes("Please wait...")) {
+        body1 = await fetchOnce("https://www.tiktok.com/explore") || body1;
+      }
+
       const m1 = body1.match(/"region"\s*:\s*"([A-Z]{2})"/);
       if (m1?.[1]) return m1[1];
 
-      // reference1: 第二次带更完整 header（含 gzip / en）
-      const r2 = await fetchOnce("https://www.tiktok.com/", {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+      // 第二次带更完整 header
+      let body2 = await fetchOnce("https://www.tiktok.com/", {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Encoding": "gzip",
         "Accept-Language": "en"
       });
-      let body2 = r2.body || "";
-      if (body1.includes("Please wait...")) {
-        const rExplore2 = await fetchOnce("https://www.tiktok.com/explore", {
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
-          "Accept-Encoding": "gzip",
+      if (body2.includes("Please wait...")) {
+        body2 = await fetchOnce("https://www.tiktok.com/explore", {
           "Accept-Language": "en"
-        });
-        body2 = rExplore2.body || body2;
+        }) || body2;
       }
 
       const m2 = body2.match(/"region"\s*:\s*"([A-Z]{2})"/);
       if (m2?.[1]) return m2[1];
 
-      // 有内容但解析不到 region：按 OK（避免误报）
       if (body1 || body2) return "OK";
-
       return "❌";
-    } catch {
-      return "❌";
-    }
+    } catch { return "❌"; }
   }
 
-  // ===================== Gemini 检测（参考 checkref2 AIUnlockTest_Gemini_location）=====================
-  async function checkGemini(ctx) {
+  // ===================== Gemini 检测（修正正则，移除过松 fallback） =====================
+  async function checkGemini() {
     try {
       const url = 'https://gemini.google.com/_/BardChatUi/data/batchexecute';
       const bodyRaw = 'f.req=[["K4WWud","[[0],[\"en-US\"]]",null,"generic"]]';
-      // POST as form-like raw data to mimic bash curl --data-raw
-      const res = await ctx.http.post(url, {
+      const res = await httpPostRetry(url, {
         timeout: 10000,
         headers: { "User-Agent": BASE_UA, "Accept-Language": "en-US", "Content-Type": "application/x-www-form-urlencoded" },
         body: bodyRaw,
         followRedirect: true
-      }).catch(() => null);
+      }, 1).catch(() => null);
 
       const txt = await readBody(res);
       if (!txt) return "❌";
 
-      // Try several extraction strategies, progressively more relaxed
-      // 1) JSON-like countryCode
+      // 策略1: JSON countryCode
       let m = txt.match(/"countryCode"\s*:\s*"([A-Z]{2})"/i);
-      if (m?.[1]) return m[1].toUpperCase();
+      if (m?.[1] && KNOWN_COUNTRY_CODES.has(m[1].toUpperCase())) return m[1].toUpperCase();
 
-      // 2) requestCountry.id pattern
+      // 策略2: requestCountry.id
       m = txt.match(/"requestCountry"\s*:\s*\{[^}]*"id"\s*:\s*"([A-Z]{2})"/i);
-      if (m?.[1]) return m[1].toUpperCase();
+      if (m?.[1] && KNOWN_COUNTRY_CODES.has(m[1].toUpperCase())) return m[1].toUpperCase();
 
-      // 3) The batchexecute encoded chunk may contain escaped brackets like [[\"TW\",\"S
-      m = txt.match(/\[\[\\?\"([A-Z]{2})\\?\",\\?\"S/);
-      if (m?.[1]) return m[1].toUpperCase();
+      // 策略3: batchexecute 编码块中的 [["XX","S 模式（参考 Bash 脚本 jq .[0][2]）
+      m = txt.match(/\[\[\\?"([A-Z]{2})\\?",\\?"S/);
+      if (m?.[1] && KNOWN_COUNTRY_CODES.has(m[1].toUpperCase())) return m[1].toUpperCase();
 
-      // 4) Fallback: search near the K4WWud marker for two-letter code
-      const idx = txt.indexOf('K4WWud');
-      if (idx >= 0) {
-        const slice = txt.slice(idx, idx + 200);
-        const m2 = slice.match(/([A-Z]{2})/);
-        if (m2?.[1]) return m2[1].toUpperCase();
-      }
-
-      // 能拿到响应但无法解析出国家码：按 OK（可访问但未知地区）
+      // 能拿到响应但无法解析 → 标记为可访问但未知地区
       return "OK";
-    } catch (e) {
-      return "❌";
-    }
+    } catch { return "❌"; }
   }
 
-// ...existing code...
-  // ===================== ChatGPT 检测（按 checkref2.MediaUnlockTest_ChatGPT 思路，输出仅 ❌ / APP / 地区码）=====================
-  async function checkChatGPT(ctx) {
+  // ===================== ChatGPT 检测（增加 WEB 中间状态 & cf_details 细分） =====================
+  async function checkChatGPT() {
     try {
-      // 1) 访问 chatgpt.com 取响应头（看是否有 Location，代表 Web 访问是否可用）
+      // 1) chatgpt.com HEAD → 看是否有 Location（Web 是否可访问）
       const headRes = await ctx.http.get("https://chatgpt.com", {
-        timeout: 10000,
-        headers: { "User-Agent": BASE_UA },
-        followRedirect: false
+        timeout: 10000, headers: { "User-Agent": BASE_UA }, followRedirect: false
       }).catch(() => null);
-  const headOk = !!headRes;
-  const locationHeader = (headRes?.headers?.location || headRes?.headers?.Location || "");
-  // 采用对方的 web 判定逻辑：禁止自动跳转时仅在存在 Location header（重定向）时才认为 Web 可访问
-  const webAccessible = headOk && !!locationHeader;
+      const locationHeader = headRes?.headers?.location || headRes?.headers?.Location || "";
+      const webAccessible = !!headRes && !!locationHeader;
 
-      // 2) 访问 ios.chat.openai.com 拿正文和 cf_details（代表 APP 接口是否可用）
+      // 2) ios.chat.openai.com → APP 接口
       const iosRes = await ctx.http.get("https://ios.chat.openai.com", {
-        timeout: 10000,
-        headers: { "User-Agent": BASE_UA },
-        followRedirect: true
+        timeout: 10000, headers: { "User-Agent": BASE_UA }, followRedirect: true
       }).catch(() => null);
       const iosBody = await readBody(iosRes);
 
-      // 解析 cf_details（可能在 JSON 或内嵌脚本）
+      // 解析 cf_details
       let cfDetails = "";
       try {
-        const asJson = iosBody ? JSON.parse(iosBody) : null;
-        if (asJson && asJson.cf_details) cfDetails = String(asJson.cf_details);
+        const j = iosBody ? JSON.parse(iosBody) : null;
+        if (j?.cf_details) cfDetails = String(j.cf_details);
       } catch {
-        const m = iosBody ? iosBody.match(/"cf_details"\s*:\s*"([^"]*)"/) : null;
-        if (m?.[1]) cfDetails = m[1];
+        const mc = iosBody ? iosBody.match(/"cf_details"\s*:\s*"([^"]*)"/) : null;
+        if (mc?.[1]) cfDetails = mc[1];
       }
 
-      // 识别 APP 是否被屏蔽（常见的 blocked / unsupported 字样 或 cf_details 标记）
+      // APP 是否被屏蔽
       const appBlocked = !iosBody
         || iosBody.includes("blocked_why_headline")
         || iosBody.includes("unsupported_country_region_territory")
@@ -475,38 +416,35 @@ async function fetchBaseInfo(globalStart) {
         || cfDetails.includes("(2)");
       const appAccessible = !!iosBody && !appBlocked;
 
-      // 3) 返回映射：
-      // - 都不可用 => ❌
-      // - 仅 Web 可用 => WEB
-      // - 仅 APP 可用 => APP
-      // - 两者都可用 => 尽量返回国家码（trace.loc），失败则返回 XX
+      // 3) 决策
       if (!webAccessible && !appAccessible) return "❌";
-      if (webAccessible && !appAccessible) return "WEB";
+
+      // 仅 APP 可用
       if (appAccessible && !webAccessible) return "APP";
+
+      // Web 可用但 APP 受限 → WEB（参考 Bash 脚本的 "Web Only" 状态）
+      if (webAccessible && !appAccessible) {
+        return "WEB";
+      }
+
+      // 两者都可用 → 获取地区码
       if (webAccessible && appAccessible) {
         const traceRes = await ctx.http.get("https://chatgpt.com/cdn-cgi/trace", {
-          timeout: 8000,
-          headers: { "User-Agent": BASE_UA },
-          followRedirect: true
+          timeout: 8000, headers: { "User-Agent": BASE_UA }, followRedirect: true
         }).catch(() => null);
         const traceTxt = await readBody(traceRes);
         if (traceTxt) {
           const m = traceTxt.match(/loc=([A-Z]{2})/);
           if (m?.[1]) return m[1];
         }
-        // trace 未能提供国家码时，表示两端可访问但地区未知，返回 OK 以表示可用
         return "OK";
       }
 
-      // 兜底（不应到达）
       return "❌";
-    } catch {
-      return "❌";
-    }
+    } catch { return "❌"; }
   }
 
-
-  // ===================== Disney+ 检测（完全按 reference1 Bash 版思路）=====================
+  // ===================== Disney+ 检测（完整版，修复冗余请求） =====================
   const DISNEY_BEARER = "Bearer ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84";
   const DISNEY_DEVICES_URL = "https://disney.api.edge.bamgrid.com/devices";
   const DISNEY_TOKEN_URL = "https://disney.api.edge.bamgrid.com/token";
@@ -514,54 +452,49 @@ async function fetchBaseInfo(globalStart) {
   const DISNEY_COOKIES_PRIMARY = "https://github.com/xykt/IPQuality/raw/main/ref/cookies.txt";
   const DISNEY_COOKIES_FALLBACK = "https://testingcf.jsdelivr.net/gh/xykt/IPQuality@main/ref/cookies.txt";
 
-  async function fetchDisneyCookieTemplates(ctx) {
+  async function fetchDisneyCookieTemplates() {
     const fetchText = async (u) => {
-      const r = await ctx.http.get(u, { timeout: 6000, headers: { "User-Agent": BASE_UA }, followRedirect: true }).catch(() => null);
-      const t = await readBody(r);
-      return (t || "").trim();
+      try {
+        const r = await ctx.http.get(u, { timeout: 6000, headers: { "User-Agent": BASE_UA }, followRedirect: true });
+        return ((await readBody(r)) || "").trim();
+      } catch { return ""; }
     };
     const txt = (await fetchText(DISNEY_COOKIES_PRIMARY)) || (await fetchText(DISNEY_COOKIES_FALLBACK));
     if (!txt) return null;
     const lines = txt.split(/\r?\n/);
-    // Bash: 第 1 行用于 /token（含 DISNEYASSERTION 占位符），第 8 行用于 GraphQL（含 ILOVEDISNEY 占位符）
     const tokenTpl = (lines[0] || "").trim();
     const gqlTpl = (lines[7] || "").trim();
-    if (!tokenTpl || !gqlTpl) return null;
-    return { tokenTpl, gqlTpl };
+    return (tokenTpl && gqlTpl) ? { tokenTpl, gqlTpl } : null;
   }
 
-  async function checkDisneyPlusFull(ctx) {
+  async function checkDisneyPlus() {
     try {
-      const templates = await fetchDisneyCookieTemplates(ctx);
+      const templates = await fetchDisneyCookieTemplates();
       if (!templates) return "❌";
 
-      // 1) /devices -> assertion
-      const pre = await ctx.http.post(DISNEY_DEVICES_URL, {
+      // 1) /devices → assertion
+      const preRes = await ctx.http.post(DISNEY_DEVICES_URL, {
         timeout: 10000,
         headers: {
           "authorization": DISNEY_BEARER,
           "content-type": "application/json; charset=UTF-8",
           "user-agent": BASE_UA
         },
-        body: JSON.stringify({
-          deviceFamily: "browser",
-          applicationRuntime: "chrome",
-          deviceProfile: "windows",
-          attributes: {}
-        }),
+        body: JSON.stringify({ deviceFamily: "browser", applicationRuntime: "chrome", deviceProfile: "windows", attributes: {} }),
         followRedirect: true
       }).catch(() => null);
-      const preJson = pre ? await pre.json().catch(() => null) : null;
+
+      let preJson = null;
+      try { preJson = preRes ? await preRes.json() : null; } catch {}
       const assertion = preJson?.assertion;
       if (!assertion) return "❌";
 
-      // 2) /token -> refresh_token
+      // 2) /token → refresh_token
       const tokenBody = templates.tokenTpl.replace(/DISNEYASSERTION/g, assertion);
       const tokRes = await ctx.http.post(DISNEY_TOKEN_URL, {
         timeout: 10000,
         headers: {
           "authorization": DISNEY_BEARER,
-          // 参考 Bash：不显式给 content-type，这里按表单提交更接近 curl -d 行为
           "content-type": "application/x-www-form-urlencoded",
           "user-agent": BASE_UA
         },
@@ -570,13 +503,14 @@ async function fetchBaseInfo(globalStart) {
       }).catch(() => null);
 
       const tokText = await readBody(tokRes);
-      // Bash: forbidden-location / 403 ERROR => no
       if (tokText.includes("forbidden-location") || tokText.includes("403 ERROR")) return "❌";
-      const tokJson = tokText ? JSON.parse(tokText) : null;
+
+      let tokJson = null;
+      try { tokJson = tokText ? JSON.parse(tokText) : null; } catch {}
       const refreshToken = tokJson?.refresh_token;
       if (!refreshToken) return "❌";
 
-      // 3) GraphQL -> region + inSupportedLocation
+      // 3) GraphQL
       const gqlBody = templates.gqlTpl.replace(/ILOVEDISNEY/g, refreshToken);
       const gqlRes = await ctx.http.post(DISNEY_GQL_URL, {
         timeout: 10000,
@@ -588,90 +522,46 @@ async function fetchBaseInfo(globalStart) {
         body: gqlBody,
         followRedirect: true
       }).catch(() => null);
-      const gqlJson = gqlRes ? await gqlRes.json().catch(() => null) : null;
+
+      let gqlJson = null;
+      try { gqlJson = gqlRes ? await gqlRes.json() : null; } catch {}
       if (!gqlJson) return "❌";
 
       const region = (gqlJson?.extensions?.sdk?.session?.location?.countryCode || "").toUpperCase();
       const inSupportedLocation = gqlJson?.extensions?.sdk?.session?.inSupportedLocation;
 
-      // 4) preview/unavailable 检测（按 Bash：看最终 URL 是否含 preview + unavailable）
+      // 4) preview/unavailable 检测
       const webRes = await ctx.http.get("https://disneyplus.com", {
-        timeout: 10000,
-        headers: commonHeaders,
-        followRedirect: true
+        timeout: 10000, headers: commonHeaders, followRedirect: true
       }).catch(() => null);
       const finalUrl = webRes?.url || "";
       const isUnavailable = finalUrl.includes("preview") && finalUrl.includes("unavailable");
 
-      // 5) 完全按 Bash 分支映射到 UI 文本
+      // 5) 分支映射
       if (region === "JP") return "JP";
-      if (region && inSupportedLocation === false && !isUnavailable) return "⏳"; // pending
+      if (region && inSupportedLocation === false && !isUnavailable) return "⏳";
       if (region && isUnavailable) return "❌";
       if (region && inSupportedLocation === true) return region;
-      if (!region) return "❌";
       return "❌";
-    } catch {
-      return "❌";
-    }
+    } catch { return "❌"; }
   }
 
-  // 统一解锁检测函数
-  const checkPlatform = async (name, url, isNetflix = false, geoHint = "XX") => {
+  // ===================== 统一解锁检测调度 =====================
+  async function checkPlatform(name, geoHint) {
     try {
-      const isAI = name === "GPT" || name === "Gemini";
-      
-      // 奈飞解锁检测逻辑（✅ Bash风格）
-      if (isNetflix) {
-        const resultText = await checkNetflix(ctx, geoHint);
-        return { name, region: resultText };
+      switch (name) {
+        case "GPT":     return { name, region: await checkChatGPT() };
+        case "Gemini":  return { name, region: await checkGemini() };
+        case "奈飞":    return { name, region: await checkNetflix(geoHint) };
+        case "TikTok":  return { name, region: await checkTikTok() };
+        case "Disney":  return { name, region: await checkDisneyPlus() };
+        default:        return { name, region: "❌" };
       }
-
-      // TikTok 解锁检测（按 reference1 思路）
-      if (name === "TikTok") {
-        const resultText = await checkTikTok(ctx);
-        return { name, region: resultText };
-      }
-
-      // ChatGPT（GPT）检测：按 checkref2 Bash 版逻辑
-      if (name === "GPT") {
-        const resultText = await checkChatGPT(ctx);
-        return { name, region: resultText };
-      }
-
-      // Gemini 检测：使用 checkref2 中的 AIUnlockTest_Gemini_location 思路
-      if (name === "Gemini") {
-        const resultText = await checkGemini(ctx);
-        return { name, region: resultText };
-      }
-
-      // 非奈飞/非 GPT 平台检测逻辑（保留原有）
-      const res = await ctx.http.get(url, {
-        timeout: 4500,
-        headers: commonHeaders,
-        followRedirect: isAI ? true : false
-      });
-
-      // Disney+ 专项逻辑（完全按 reference1 Bash 版）
-      if (name === "Disney") {
-        const resultText = await checkDisneyPlusFull(ctx);
-        return { name, region: resultText };
-      }
-
-      // AI/其他平台关键词过滤逻辑
-      const finalUrl = res.url || "";
-      const isBlocked = finalUrl.includes("unsupported") || finalUrl.includes("error") || finalUrl.includes("preview");
-
-      if (res.status === 200 && !isBlocked) {
-        return { name, region: geoHint };
-      }
-      return { name, region: "❌" };
-    } catch (e) {
-      return { name, region: "❌" };
-    }
-  };
+    } catch { return { name, region: "❌" }; }
+  }
 
   // ===================== 主逻辑 =====================
-  // 基础网络信息
+  // 网络信息
   const d = ctx.device || {};
   const isWifi = !!d.wifi?.ssid;
   let netName = "未连接", netIcon = "antenna.radiowaves.left.and.right";
@@ -684,78 +574,54 @@ async function fetchBaseInfo(globalStart) {
     netName = `蜂窝: ${map[r] || r || "5G"}`;
   }
 
-  // 科学计时：独立内部计时
-  const globalStart = Date.now();
+  // ★ 最大化并行：基础信息 + 物理出口同时获取
+  const [baseInfo, realPhysicalRegion] = await Promise.all([
+    fetchBaseInfo(),
+    getPhysicalLoc()
+  ]);
 
-  // 获取基础IP信息（调用新增的fetchBaseInfo函数）
-  const baseInfo = await fetchBaseInfo(globalStart);
-  // 获取物理出口（GeoHint）
-  const realPhysicalRegion = await getPhysicalLoc();
-  // 确定GeoHint（ipinfoCountry优先，物理出口兜底）
+  // 确定 geoHint
   const geoHint = baseInfo.ipinfoCountry || realPhysicalRegion || "XX";
 
-  // 执行解锁检测（传入geoHint）
+  // ★ 解锁检测（全部并行）
   const unlockResults = await Promise.all([
-    checkPlatform("GPT", "https://chatgpt.com/auth/login", false, geoHint),
-    checkPlatform("Gemini", "https://gemini.google.com/app", false, geoHint),
-    checkPlatform("奈飞", "", true, geoHint), // 奈飞无需传url，isNetflix=true即可
-    checkPlatform("TikTok", "https://www.tiktok.com/", false, geoHint),
-    checkPlatform("Disney", "https://www.disneyplus.com", false, geoHint)
+    checkPlatform("GPT", geoHint),
+    checkPlatform("Gemini", geoHint),
+    checkPlatform("奈飞", geoHint),
+    checkPlatform("TikTok", geoHint),
+    checkPlatform("Disney", geoHint)
   ]);
+
+  // 格式化解锁文本
   const unlockText = unlockResults.map(r => `${r.name} ${r.region}`).join("，");
 
-  // 测试模式输出：仅用于调试，不影响最终 Widget 文本
-  if (typeof TEST_MODE !== 'undefined' && TEST_MODE) {
-    try {
-      // console.log 在某些运行环境可能不可见，但保留以便测试时使用
-      console.log('TEST_MODE: baseInfo=', JSON.stringify(baseInfo || {}));
-      console.log('TEST_MODE: geoHint=', geoHint);
-      console.log('TEST_MODE: unlockResults=', JSON.stringify(unlockResults || []));
-      console.log('TEST_MODE: unlockText=', unlockText);
-    } catch (e) {
-      // 忽略任何序列化问题
-    }
-  }
-
-  // 风险评分（保留原有）
+  // 风险评分
   const risk = baseInfo.ipData.fraudScore;
-  let riskTxt = "检测失败", riskColor = C_SUB; 
+  let riskTxt = "检测失败", riskColor = C_SUB;
   if (typeof risk === "number") {
-    if (risk < 30) {
-      riskTxt = `极高纯净 (${risk})`;
-      riskColor = C_GREEN;
-    } else if (risk < 60) {
-      riskTxt = `中等风险 (${risk})`;
-      riskColor = C_YELLOW;
-    } else {
-      riskTxt = `高风险警告 (${risk})`;
-      riskColor = C_RED;
-    }
+    if (risk < 30) { riskTxt = `极高纯净 (${risk})`; riskColor = C_GREEN; }
+    else if (risk < 60) { riskTxt = `中等风险 (${risk})`; riskColor = C_YELLOW; }
+    else { riskTxt = `高风险警告 (${risk})`; riskColor = C_RED; }
   }
 
-  // IP类型判断（保留原有）
-  const ipType = baseInfo.ipData.isResidential === true ? "🏠 住宅" 
-    : baseInfo.ipData.isResidential === false ? "🏢 机房" 
+  // IP 类型
+  const ipType = baseInfo.ipData.isResidential === true ? "🏠 住宅"
+    : baseInfo.ipData.isResidential === false ? "🏢 机房"
     : getIPType(baseInfo.pubIsp, baseInfo.asnInfo);
 
-  // 延迟颜色（保留原有）
+  // 延迟颜色 & 文本
+  const primaryDelay = baseInfo.realTcpDelay > 0 ? baseInfo.realTcpDelay : baseInfo.apiResponseTime;
   let delayColor = C_SUB;
-  if (baseInfo.realTcpDelay > 0) {
-    if (baseInfo.realTcpDelay < 150) delayColor = C_GREEN;
-    else if (baseInfo.realTcpDelay <= 350) delayColor = C_YELLOW;
-    else delayColor = C_RED;
-  } else if (baseInfo.apiResponseTime > 0) {
-    if (baseInfo.apiResponseTime < 150) delayColor = C_GREEN;
-    else if (baseInfo.apiResponseTime <= 350) delayColor = C_YELLOW;
+  if (primaryDelay > 0) {
+    if (primaryDelay < 150) delayColor = C_GREEN;
+    else if (primaryDelay <= 350) delayColor = C_YELLOW;
     else delayColor = C_RED;
   }
-
-  // 延迟文本（保留原有）
-  const delayText = baseInfo.realTcpDelay > 0 
-    ? `${baseInfo.realTcpDelay}ms (网络RTT) / ${baseInfo.apiResponseTime || "—"}ms (接口)`
+  const delayText = baseInfo.realTcpDelay > 0
+    ? `${baseInfo.realTcpDelay}ms (RTT) / ${baseInfo.apiResponseTime || "—"}ms (接口)`
     : `${baseInfo.apiResponseTime || "—"}ms (接口)`;
 
-  // UI 组件（保留原有）
+  // ===================== UI 构建 =====================
   const Row = (ic, icCol, label, val, valCol) => ({
     type: "stack", direction: "row", alignItems: "center", padding: [3, 0],
     children: [
@@ -767,7 +633,6 @@ async function fetchBaseInfo(globalStart) {
     ]
   });
 
-  // 最终返回（保留原有）
   return {
     type: "widget",
     padding: [8, 10],
@@ -778,17 +643,17 @@ async function fetchBaseInfo(globalStart) {
       {
         type: "stack", direction: "row", alignItems: "center", padding: [2, 0, 4, 0],
         children: [
-          { type: "image", src: `sf-symbol:${netIcon}`, color: getThemeColor(C_BLUE), width:14, height:14 },
-          { type: "spacer", length:5 },
-          { type: "text", text: netName, font: { size:13, weight:"semibold" }, textColor: getThemeColor(C_TEXT) },
+          { type: "image", src: `sf-symbol:${netIcon}`, color: getThemeColor(C_BLUE), width: 14, height: 14 },
+          { type: "spacer", length: 5 },
+          { type: "text", text: netName, font: { size: 13, weight: "semibold" }, textColor: getThemeColor(C_TEXT) },
           { type: "spacer" },
-          { type: "text", text: delayText, font: { size:10, weight:"medium" }, textColor: getThemeColor(delayColor) }
+          { type: "text", text: delayText, font: { size: 10, weight: "medium" }, textColor: getThemeColor(delayColor) }
         ]
       },
       Row("globe", C_BLUE, "直连IP", `${baseInfo.pubIp} (${baseInfo.pubIsp})`, C_TEXT),
       Row("mappin", C_SUB, "位置", baseInfo.pubLoc, C_TEXT),
       Row("paperplane.fill", C_BLUE, "落地IP", `${baseInfo.nIp} ${ipType}`, C_TEXT),
-      Row("mappin", C_SUB, "落地地区", baseInfo.nLoc, C_TEXT), // ✅ 已去emoji
+      Row("mappin", C_SUB, "落地地区", baseInfo.nLoc, C_TEXT),
       Row("number.square.fill", C_SUB, "ASN", baseInfo.asnInfo, C_TEXT),
       Row("shield.fill", riskColor, "风险评分", riskTxt, riskColor),
       Row("play.tv.fill", C_BLUE, "解锁", unlockText, C_TEXT)
